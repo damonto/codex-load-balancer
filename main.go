@@ -14,13 +14,13 @@ import (
 	"time"
 )
 
-func main() {
-	var (
-		apiKey   string
-		tokenDir string
-		port     int
-	)
+var (
+	apiKey   string
+	tokenDir string
+	port     int
+)
 
+func main() {
 	flag.StringVar(&apiKey, "api-key", "", "API key for admin endpoints")
 	flag.StringVar(&tokenDir, "token-dir", "", "directory with auth.json files")
 	flag.IntVar(&port, "port", defaultPort, "port to listen on")
