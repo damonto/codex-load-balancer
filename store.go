@@ -8,9 +8,11 @@ import (
 )
 
 type WindowUsage struct {
-	UsedPercent  float64
-	LimitPercent float64
-	Known        bool
+	UsedPercent       float64
+	LimitPercent      float64
+	Known             bool
+	ResetAt           time.Time
+	ResetAfterSeconds int
 }
 
 func (w WindowUsage) RemainingPercent() float64 {
@@ -320,13 +322,17 @@ type TokenRef struct {
 }
 
 type TokenStats struct {
-	ID                string     `json:"id"`
-	Status            string     `json:"status"`
-	FiveHourLimit     float64    `json:"five_hour_limit"`
-	FiveHourRemaining float64    `json:"five_hour_remaining"`
-	WeeklyLimit       float64    `json:"weekly_limit"`
-	WeeklyRemaining   float64    `json:"weekly_remaining"`
-	LastSync          *time.Time `json:"last_sync"`
+	ID                         string     `json:"id"`
+	Status                     string     `json:"status"`
+	FiveHourLimit              float64    `json:"five_hour_limit"`
+	FiveHourRemaining          float64    `json:"five_hour_remaining"`
+	FiveHourResetAt            *time.Time `json:"five_hour_reset_at"`
+	FiveHourResetAfterSeconds  *int       `json:"five_hour_reset_after_seconds"`
+	WeeklyLimit                float64    `json:"weekly_limit"`
+	WeeklyRemaining            float64    `json:"weekly_remaining"`
+	WeeklyResetAt              *time.Time `json:"weekly_reset_at"`
+	WeeklyResetAfterSeconds    *int       `json:"weekly_reset_after_seconds"`
+	LastSync                   *time.Time `json:"last_sync"`
 }
 
 func (s *TokenStore) Stats() []TokenStats {
@@ -361,14 +367,40 @@ func (s *TokenStore) Stats() []TokenStats {
 			weeklyRemaining = token.Weekly.RemainingPoints()
 		}
 
+		var fiveHourResetAt *time.Time
+		if !token.FiveHour.ResetAt.IsZero() {
+			ts := token.FiveHour.ResetAt
+			fiveHourResetAt = &ts
+		}
+		var fiveHourResetAfter *int
+		if token.FiveHour.ResetAfterSeconds > 0 {
+			value := token.FiveHour.ResetAfterSeconds
+			fiveHourResetAfter = &value
+		}
+
+		var weeklyResetAt *time.Time
+		if !token.Weekly.ResetAt.IsZero() {
+			ts := token.Weekly.ResetAt
+			weeklyResetAt = &ts
+		}
+		var weeklyResetAfter *int
+		if token.Weekly.ResetAfterSeconds > 0 {
+			value := token.Weekly.ResetAfterSeconds
+			weeklyResetAfter = &value
+		}
+
 		stats = append(stats, TokenStats{
-			ID:                token.ID,
-			Status:            status,
-			FiveHourLimit:     fiveHourLimit,
-			FiveHourRemaining: fiveHourRemaining,
-			WeeklyLimit:       weeklyLimit,
-			WeeklyRemaining:   weeklyRemaining,
-			LastSync:          lastSync,
+			ID:                        token.ID,
+			Status:                    status,
+			FiveHourLimit:             fiveHourLimit,
+			FiveHourRemaining:         fiveHourRemaining,
+			FiveHourResetAt:           fiveHourResetAt,
+			FiveHourResetAfterSeconds: fiveHourResetAfter,
+			WeeklyLimit:               weeklyLimit,
+			WeeklyRemaining:           weeklyRemaining,
+			WeeklyResetAt:             weeklyResetAt,
+			WeeklyResetAfterSeconds:   weeklyResetAfter,
+			LastSync:                  lastSync,
 		})
 	}
 	s.mu.RUnlock()

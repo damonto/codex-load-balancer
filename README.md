@@ -102,8 +102,12 @@ Response fields per token:
 - `status` (active/invalid/cooldown)
 - `five_hour_limit`
 - `five_hour_remaining`
+- `five_hour_reset_at`
+- `five_hour_reset_after_seconds`
 - `weekly_limit`
 - `weekly_remaining`
+- `weekly_reset_at`
+- `weekly_reset_after_seconds`
 - `last_sync`
 
 ## Logs

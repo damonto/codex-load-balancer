@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type rateLimitStatusPayload struct {
@@ -104,7 +105,14 @@ func windowUsageFromSnapshot(snapshot *rateLimitWindowSnapshot) WindowUsage {
 	if snapshot == nil {
 		return WindowUsage{}
 	}
-	return windowUsageFromPercent(float64(snapshot.UsedPercent))
+	usage := windowUsageFromPercent(float64(snapshot.UsedPercent))
+	if snapshot.ResetAt > 0 {
+		usage.ResetAt = time.Unix(int64(snapshot.ResetAt), 0).UTC()
+	}
+	if snapshot.ResetAfterSeconds > 0 {
+		usage.ResetAfterSeconds = snapshot.ResetAfterSeconds
+	}
+	return usage
 }
 
 func pickSnapshotWindow(windows []*rateLimitWindowSnapshot, targetSeconds, minSeconds, maxSeconds int) (WindowUsage, bool) {

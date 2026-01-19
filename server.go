@@ -20,6 +20,14 @@ type Server struct {
 }
 
 func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
+	slog.Info(
+		"proxy request",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"host", r.Host,
+		"remote", r.RemoteAddr,
+		"content_length", r.ContentLength,
+	)
 	if !allowedPath(r.URL.Path) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -70,9 +78,19 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 		resp, respBody, stream, err := s.forwardRequest(r, body, token, forwardPath)
 		if err != nil {
+			slog.Warn("upstream request", "token", token.ID, "session", sessionLabel, "err", err)
 			http.Error(w, "upstream error", http.StatusBadGateway)
 			return
 		}
+		slog.Info(
+			"upstream response",
+			"token", token.ID,
+			"session", sessionLabel,
+			"status", resp.StatusCode,
+			"content_type", resp.Header.Get("Content-Type"),
+			"stream", stream,
+			"attempt", attempt+1,
+		)
 
 		if resp.StatusCode == http.StatusUnauthorized {
 			refreshed, err := maybeRefreshToken(r.Context(), s.store, token.ID)
@@ -91,9 +109,19 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				}
 				resp, respBody, stream, err = s.forwardRequest(r, body, token, forwardPath)
 				if err != nil {
+					slog.Warn("upstream request", "token", token.ID, "session", sessionLabel, "err", err)
 					http.Error(w, "upstream error", http.StatusBadGateway)
 					return
 				}
+				slog.Info(
+					"upstream response",
+					"token", token.ID,
+					"session", sessionLabel,
+					"status", resp.StatusCode,
+					"content_type", resp.Header.Get("Content-Type"),
+					"stream", stream,
+					"attempt", attempt+1,
+				)
 			}
 		}
 
@@ -134,8 +162,19 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if stream {
-			if err := streamResponse(w, resp); err != nil {
-				slog.Warn("stream response", "err", err)
+			slog.Info(
+				"stream start",
+				"token", token.ID,
+				"session", sessionLabel,
+				"status", resp.StatusCode,
+				"content_type", resp.Header.Get("Content-Type"),
+			)
+			written, err := streamResponse(w, resp)
+			ctxErr := r.Context().Err()
+			if err != nil {
+				slog.Warn("stream end", "token", token.ID, "session", sessionLabel, "bytes", written, "err", err, "ctx_err", ctxErr)
+			} else {
+				slog.Info("stream end", "token", token.ID, "session", sessionLabel, "bytes", written, "ctx_err", ctxErr)
 			}
 			return
 		}
@@ -169,7 +208,7 @@ func (s *Server) forwardRequest(r *http.Request, body []byte, token TokenState, 
 		return nil, nil, false, fmt.Errorf("send upstream request: %w", err)
 	}
 
-	if resp.StatusCode == http.StatusOK {
+	if isEventStream(resp) {
 		return resp, nil, true, nil
 	}
 
@@ -207,13 +246,31 @@ func (s *Server) applyUsageFromHeaders(tokenID string, headers http.Header) {
 	if !ok {
 		return
 	}
-	if !hasFiveHour {
+
+	if hasFiveHour {
+		fiveHour = mergeUsage(current.FiveHour, fiveHour)
+	} else {
 		fiveHour = current.FiveHour
 	}
-	if !hasWeekly {
+	if hasWeekly {
+		weekly = mergeUsage(current.Weekly, weekly)
+	} else {
 		weekly = current.Weekly
 	}
 	s.store.UpdateUsage(tokenID, fiveHour, weekly, time.Now())
+}
+
+func mergeUsage(current WindowUsage, update WindowUsage) WindowUsage {
+	if !update.Known {
+		return current
+	}
+	if update.ResetAfterSeconds == 0 {
+		update.ResetAfterSeconds = current.ResetAfterSeconds
+	}
+	if update.ResetAt.IsZero() {
+		update.ResetAt = current.ResetAt
+	}
+	return update
 }
 
 func allowedPath(path string) bool {
@@ -259,10 +316,10 @@ func writeResponse(w http.ResponseWriter, resp *http.Response, body []byte) {
 	_, _ = w.Write(body)
 }
 
-func streamResponse(w http.ResponseWriter, resp *http.Response) error {
+func streamResponse(w http.ResponseWriter, resp *http.Response) (int64, error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		return fmt.Errorf("stream response: response writer does not support flushing")
+		return 0, fmt.Errorf("stream response: response writer does not support flushing")
 	}
 
 	copyHeaders(w.Header(), resp.Header)
@@ -270,11 +327,11 @@ func streamResponse(w http.ResponseWriter, resp *http.Response) error {
 	flusher.Flush()
 
 	defer resp.Body.Close()
-	_, err := io.Copy(flushWriter{w: w, f: flusher}, resp.Body)
+	written, err := io.Copy(flushWriter{w: w, f: flusher}, resp.Body)
 	if err != nil {
-		return fmt.Errorf("stream response body: %w", err)
+		return written, fmt.Errorf("stream response body: %w", err)
 	}
-	return nil
+	return written, nil
 }
 
 type flushWriter struct {
@@ -289,6 +346,14 @@ func (fw flushWriter) Write(p []byte) (int, error) {
 	}
 	fw.f.Flush()
 	return n, nil
+}
+
+func isEventStream(resp *http.Response) bool {
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
+	return strings.HasPrefix(contentType, "text/event-stream")
 }
 
 func copyHeaders(dst http.Header, src http.Header) {
