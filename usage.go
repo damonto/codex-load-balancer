@@ -1,0 +1,147 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"net/http"
+	"strings"
+)
+
+type rateLimitStatusPayload struct {
+	RateLimit *rateLimitStatusDetails `json:"rate_limit"`
+}
+
+type rateLimitStatusDetails struct {
+	Allowed         bool                     `json:"allowed"`
+	LimitReached    bool                     `json:"limit_reached"`
+	PrimaryWindow   *rateLimitWindowSnapshot `json:"primary_window"`
+	SecondaryWindow *rateLimitWindowSnapshot `json:"secondary_window"`
+}
+
+type rateLimitWindowSnapshot struct {
+	UsedPercent        int `json:"used_percent"`
+	LimitWindowSeconds int `json:"limit_window_seconds"`
+	ResetAfterSeconds  int `json:"reset_after_seconds"`
+	ResetAt            int `json:"reset_at"`
+}
+
+type UsageSnapshot struct {
+	FiveHour WindowUsage
+	Weekly   WindowUsage
+}
+
+var errUnauthorized = errors.New("unauthorized")
+
+func fetchUsage(ctx context.Context, client *http.Client, ref TokenRef) (UsageSnapshot, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, usageURL(), nil)
+	if err != nil {
+		return UsageSnapshot{}, fmt.Errorf("build usage request: %w", err)
+	}
+	req.Header.Set("Authorization", authHeaderValue(ref.Token))
+	if ref.AccountID != "" {
+		req.Header.Set("ChatGPT-Account-Id", ref.AccountID)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return UsageSnapshot{}, fmt.Errorf("send usage request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return UsageSnapshot{}, errUnauthorized
+	}
+	if resp.StatusCode != http.StatusOK {
+		return UsageSnapshot{}, fmt.Errorf("usage request status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return UsageSnapshot{}, fmt.Errorf("read usage response: %w", err)
+	}
+
+	var payload rateLimitStatusPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return UsageSnapshot{}, fmt.Errorf("decode usage response: %w", err)
+	}
+
+	return mapUsageSnapshot(payload.RateLimit), nil
+}
+
+func usageURL() string {
+	return strings.TrimRight(usageBaseURL, "/") + "/wham/usage"
+}
+
+func mapUsageSnapshot(details *rateLimitStatusDetails) UsageSnapshot {
+	if details == nil {
+		return UsageSnapshot{}
+	}
+
+	windows := make([]*rateLimitWindowSnapshot, 0, 2)
+	if details.PrimaryWindow != nil {
+		windows = append(windows, details.PrimaryWindow)
+	}
+	if details.SecondaryWindow != nil {
+		windows = append(windows, details.SecondaryWindow)
+	}
+
+	fiveHour, hasFiveHour := pickSnapshotWindow(windows, 18000, 14400, 21600)
+	weekly, hasWeekly := pickSnapshotWindow(windows, 604800, 518400, 691200)
+	if !hasFiveHour && !hasWeekly {
+		return UsageSnapshot{}
+	}
+	return UsageSnapshot{
+		FiveHour: fiveHour,
+		Weekly:   weekly,
+	}
+}
+
+func windowUsageFromSnapshot(snapshot *rateLimitWindowSnapshot) WindowUsage {
+	if snapshot == nil {
+		return WindowUsage{}
+	}
+	return windowUsageFromPercent(float64(snapshot.UsedPercent))
+}
+
+func pickSnapshotWindow(windows []*rateLimitWindowSnapshot, targetSeconds, minSeconds, maxSeconds int) (WindowUsage, bool) {
+	bestIdx := -1
+	bestDelta := 0
+	for i, window := range windows {
+		if window.LimitWindowSeconds < minSeconds || window.LimitWindowSeconds > maxSeconds {
+			continue
+		}
+		delta := window.LimitWindowSeconds - targetSeconds
+		if delta < 0 {
+			delta = -delta
+		}
+		if bestIdx == -1 || delta < bestDelta {
+			bestIdx = i
+			bestDelta = delta
+		}
+	}
+	if bestIdx == -1 {
+		return WindowUsage{}, false
+	}
+	return windowUsageFromSnapshot(windows[bestIdx]), true
+}
+
+func windowUsageFromPercent(used float64) WindowUsage {
+	if math.IsNaN(used) || math.IsInf(used, 0) {
+		return WindowUsage{}
+	}
+	if used < 0 {
+		used = 0
+	}
+	if used > 100 {
+		used = 100
+	}
+	return WindowUsage{
+		UsedPercent:  used,
+		LimitPercent: defaultLimitPoints,
+		Known:        true,
+	}
+}
