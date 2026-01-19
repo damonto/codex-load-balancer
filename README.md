@@ -61,9 +61,7 @@ Example:
 
 If a request includes one of the following headers, Synapse binds that session to a token:
 
-- `x-session-id`
-- `vscode-sessionid`
-- `x-request-id`
+- `session_id`
 
 If the bound token hits a limit error, Synapse unbinds and reselects.
 
