@@ -68,7 +68,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		resp, respBody, err := s.forwardRequest(r, body, token, forwardPath)
+		resp, respBody, stream, err := s.forwardRequest(r, body, token, forwardPath)
 		if err != nil {
 			http.Error(w, "upstream error", http.StatusBadGateway)
 			return
@@ -89,7 +89,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				if updated, ok := s.store.TokenSnapshot(token.ID); ok {
 					token = updated
 				}
-				resp, respBody, err = s.forwardRequest(r, body, token, forwardPath)
+				resp, respBody, stream, err = s.forwardRequest(r, body, token, forwardPath)
 				if err != nil {
 					http.Error(w, "upstream error", http.StatusBadGateway)
 					return
@@ -110,7 +110,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 
 		s.applyUsageFromHeaders(token.ID, resp.Header)
-		if isLimitError(resp.StatusCode, respBody) {
+		if !stream && isLimitError(resp.StatusCode, respBody) {
 			tried[token.ID] = true
 			s.store.MarkCooldown(token.ID, time.Now().Add(cooldownDuration))
 			slog.Info("token cooldown after usage limit", "token", token.ID)
@@ -133,19 +133,26 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if stream {
+			if err := streamResponse(w, resp); err != nil {
+				slog.Warn("stream response", "err", err)
+			}
+			return
+		}
+
 		writeResponse(w, resp, respBody)
 		return
 	}
 }
 
-func (s *Server) forwardRequest(r *http.Request, body []byte, token TokenState, path string) (*http.Response, []byte, error) {
+func (s *Server) forwardRequest(r *http.Request, body []byte, token TokenState, path string) (*http.Response, []byte, bool, error) {
 	target := *s.upstreamBase
 	target.Path = joinURLPath(s.upstreamBase.Path, path)
 	target.RawQuery = r.URL.RawQuery
 
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), bytes.NewReader(body))
 	if err != nil {
-		return nil, nil, fmt.Errorf("build upstream request: %w", err)
+		return nil, nil, false, fmt.Errorf("build upstream request: %w", err)
 	}
 
 	req.Header = cloneHeaders(r.Header)
@@ -159,15 +166,19 @@ func (s *Server) forwardRequest(r *http.Request, body []byte, token TokenState, 
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("send upstream request: %w", err)
+		return nil, nil, false, fmt.Errorf("send upstream request: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusOK {
+		return resp, nil, true, nil
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
-		return nil, nil, fmt.Errorf("read upstream response: %w", err)
+		return nil, nil, false, fmt.Errorf("read upstream response: %w", err)
 	}
-	return resp, respBody, nil
+	return resp, respBody, false, nil
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -243,13 +254,49 @@ func cloneHeaders(in http.Header) http.Header {
 }
 
 func writeResponse(w http.ResponseWriter, resp *http.Response, body []byte) {
-	for key, values := range resp.Header {
-		copied := make([]string, len(values))
-		copy(copied, values)
-		w.Header()[key] = copied
-	}
+	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(body)
+}
+
+func streamResponse(w http.ResponseWriter, resp *http.Response) error {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return fmt.Errorf("stream response: response writer does not support flushing")
+	}
+
+	copyHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	flusher.Flush()
+
+	defer resp.Body.Close()
+	_, err := io.Copy(flushWriter{w: w, f: flusher}, resp.Body)
+	if err != nil {
+		return fmt.Errorf("stream response body: %w", err)
+	}
+	return nil
+}
+
+type flushWriter struct {
+	w http.ResponseWriter
+	f http.Flusher
+}
+
+func (fw flushWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	if err != nil {
+		return n, err
+	}
+	fw.f.Flush()
+	return n, nil
+}
+
+func copyHeaders(dst http.Header, src http.Header) {
+	for key, values := range src {
+		copied := make([]string, len(values))
+		copy(copied, values)
+		dst[key] = copied
+	}
 }
 
 func joinURLPath(basePath, reqPath string) string {

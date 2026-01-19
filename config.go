@@ -17,7 +17,5 @@ const (
 )
 
 var sessionHeaders = []string{
-	"x-session-id",
-	"vscode-sessionid",
-	"x-request-id",
+	"session_id",
 }
