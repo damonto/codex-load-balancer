@@ -275,7 +275,7 @@ func runFallbackCheckins(ctx context.Context, manager *FallbackManager, client *
 }
 
 func performFallbackCheckin(ctx context.Context, client *http.Client, target fallbackCheckin) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.baseURL.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.baseURL.String(), nil)
 	if err != nil {
 		return fmt.Errorf("build checkin request: %w", err)
 	}
