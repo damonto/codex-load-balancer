@@ -31,10 +31,9 @@ type fallbackFileCheckin struct {
 }
 
 type fallbackAccount struct {
-	baseURL             *url.URL
-	apiKey              string
-	checkin             *fallbackCheckin
-	consecutiveFailures int
+	baseURL *url.URL
+	apiKey  string
+	checkin *fallbackCheckin
 }
 
 type fallbackCheckin struct {
@@ -42,20 +41,25 @@ type fallbackCheckin struct {
 	headers map[string]string
 }
 
+type fallbackSession struct {
+	current  int
+	failures map[int]int
+}
+
 type FallbackManager struct {
 	mu       sync.Mutex
 	path     string
 	modTime  time.Time
 	accounts []fallbackAccount
-	current  int
 	rng      *rand.Rand
+	sessions map[string]*fallbackSession
 }
 
 func NewFallbackManager(dir string) *FallbackManager {
 	return &FallbackManager{
-		path:    filepath.Join(dir, fallbackFileName),
-		current: -1,
-		rng:     rand.New(rand.NewSource(time.Now().UnixNano())),
+		path:     filepath.Join(dir, fallbackFileName),
+		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
+		sessions: make(map[string]*fallbackSession),
 	}
 }
 
@@ -92,7 +96,7 @@ func (m *FallbackManager) Reload() (bool, error) {
 	m.mu.Lock()
 	m.accounts = accounts
 	m.modTime = modTime
-	m.current = -1
+	m.sessions = make(map[string]*fallbackSession)
 	m.mu.Unlock()
 	return true, nil
 }
@@ -107,34 +111,36 @@ func (m *FallbackManager) AccountCount() int {
 	return count
 }
 
-func (m *FallbackManager) Select() (fallbackAccount, int, bool) {
+func (m *FallbackManager) Select(sessionID string) (fallbackAccount, int, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.accounts) == 0 {
 		return fallbackAccount{}, -1, false
 	}
-	if m.current < 0 || m.current >= len(m.accounts) {
-		m.current = m.rng.Intn(len(m.accounts))
+	state := m.sessionStateLocked(sessionID)
+	index := m.selectIndexLocked(state)
+	if index < 0 {
+		return fallbackAccount{}, -1, false
 	}
-	selected := m.accounts[m.current]
-	return selected, m.current, true
+	return m.accounts[index], index, true
 }
 
-func (m *FallbackManager) Report(index int, success bool) {
+func (m *FallbackManager) Report(sessionID string, index int, success bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if index < 0 || index >= len(m.accounts) {
 		return
 	}
+	state := m.sessionStateLocked(sessionID)
 	if success {
-		m.accounts[index].consecutiveFailures = 0
+		delete(state.failures, index)
 		return
 	}
-	m.accounts[index].consecutiveFailures++
-	if m.accounts[index].consecutiveFailures >= fallbackFailureThreshold {
-		m.accounts[index].consecutiveFailures = 0
-		if len(m.accounts) > 1 {
-			m.current = (index + 1) % len(m.accounts)
+	state.failures[index]++
+	if state.failures[index] >= fallbackFailureThreshold {
+		state.failures[index] = fallbackFailureThreshold
+		if state.current == index {
+			state.current = -1
 		}
 	}
 }
@@ -160,8 +166,41 @@ func (m *FallbackManager) resetAccounts(accounts []fallbackAccount, modTime time
 	}
 	m.accounts = accounts
 	m.modTime = modTime
-	m.current = -1
+	m.sessions = make(map[string]*fallbackSession)
 	return true
+}
+
+func (m *FallbackManager) sessionStateLocked(sessionID string) *fallbackSession {
+	if m.sessions == nil {
+		m.sessions = make(map[string]*fallbackSession)
+	}
+	state, ok := m.sessions[sessionID]
+	if !ok {
+		state = &fallbackSession{
+			current:  -1,
+			failures: make(map[int]int),
+		}
+		m.sessions[sessionID] = state
+	}
+	return state
+}
+
+func (m *FallbackManager) selectIndexLocked(state *fallbackSession) int {
+	if state.current >= 0 && state.current < len(m.accounts) && state.failures[state.current] < fallbackFailureThreshold {
+		return state.current
+	}
+	candidates := make([]int, 0, len(m.accounts))
+	for i := range m.accounts {
+		if state.failures[i] >= fallbackFailureThreshold {
+			continue
+		}
+		candidates = append(candidates, i)
+	}
+	if len(candidates) == 0 {
+		return -1
+	}
+	state.current = candidates[m.rng.Intn(len(candidates))]
+	return state.current
 }
 
 func parseFallbackAccounts(data []byte) ([]fallbackAccount, error) {
@@ -243,10 +282,7 @@ func runFallbackCheckinScheduler(ctx context.Context, manager *FallbackManager) 
 	client := &http.Client{Timeout: 20 * time.Second}
 	for {
 		next := nextMidnight(time.Now())
-		wait := time.Until(next)
-		if wait < time.Second {
-			wait = time.Second
-		}
+		wait := max(time.Until(next), time.Second)
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():

@@ -42,10 +42,6 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := extractSessionID(r.Header)
-	sessionLabel := sessionID
-	if sessionLabel == "" {
-		sessionLabel = "-"
-	}
 	prevTokenID := ""
 	if sessionID != "" {
 		if tokenID, ok := s.store.SessionToken(sessionID); ok {
@@ -56,7 +52,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	forwardPath := normalizeResponsesPath(r.URL.Path)
 	policy := strings.TrimSpace(r.Header.Get("X-Account-Policy"))
 	if strings.EqualFold(policy, "fallback") {
-		if !s.handleFallback(w, r, body, forwardPath) {
+		if !s.handleFallback(w, r, body, forwardPath, sessionID) {
 			http.Error(w, "no fallback accounts", http.StatusServiceUnavailable)
 		}
 		return
@@ -66,7 +62,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	for attempt := range 2 {
 		token, sticky, err := s.store.SelectToken(sessionID, tried)
 		if err != nil {
-			if s.store.LimitsExhausted() && s.handleFallback(w, r, body, forwardPath) {
+			if s.store.LimitsExhausted() && s.handleFallback(w, r, body, forwardPath, sessionID) {
 				return
 			}
 			http.Error(w, "no available tokens", http.StatusServiceUnavailable)
@@ -76,7 +72,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if sticky {
 			reason = "sticky"
 		}
-		slog.Info("token select", "token", token.ID, "reason", reason, "session", sessionLabel, "attempt", attempt+1)
+		slog.Info("token select", "token", token.ID, "reason", reason, "session", sessionID, "attempt", attempt+1)
 
 		refreshed, err := maybeRefreshTokenIfStale(r.Context(), s.store, token.ID)
 		if err != nil {
@@ -90,14 +86,14 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 		resp, respBody, stream, err := s.forwardRequest(r, body, token, forwardPath)
 		if err != nil {
-			slog.Warn("upstream request", "token", token.ID, "session", sessionLabel, "err", err)
+			slog.Warn("upstream request", "token", token.ID, "session", sessionID, "err", err)
 			http.Error(w, "upstream error", http.StatusBadGateway)
 			return
 		}
 		slog.Info(
 			"upstream response",
 			"token", token.ID,
-			"session", sessionLabel,
+			"session", sessionID,
 			"status", resp.StatusCode,
 			"content_type", resp.Header.Get("Content-Type"),
 			"stream", stream,
@@ -121,14 +117,14 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				}
 				resp, respBody, stream, err = s.forwardRequest(r, body, token, forwardPath)
 				if err != nil {
-					slog.Warn("upstream request", "token", token.ID, "session", sessionLabel, "err", err)
+					slog.Warn("upstream request", "token", token.ID, "session", sessionID, "err", err)
 					http.Error(w, "upstream error", http.StatusBadGateway)
 					return
 				}
 				slog.Info(
 					"upstream response",
 					"token", token.ID,
-					"session", sessionLabel,
+					"session", sessionID,
 					"status", resp.StatusCode,
 					"content_type", resp.Header.Get("Content-Type"),
 					"stream", stream,
@@ -177,16 +173,16 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			slog.Info(
 				"stream start",
 				"token", token.ID,
-				"session", sessionLabel,
+				"session", sessionID,
 				"status", resp.StatusCode,
 				"content_type", resp.Header.Get("Content-Type"),
 			)
 			written, err := streamResponse(w, resp)
 			ctxErr := r.Context().Err()
 			if err != nil {
-				slog.Warn("stream end", "token", token.ID, "session", sessionLabel, "bytes", written, "err", err, "ctx_err", ctxErr)
+				slog.Warn("stream end", "token", token.ID, "session", sessionID, "bytes", written, "err", err, "ctx_err", ctxErr)
 			} else {
-				slog.Info("stream end", "token", token.ID, "session", sessionLabel, "bytes", written, "ctx_err", ctxErr)
+				slog.Info("stream end", "token", token.ID, "session", sessionID, "bytes", written, "ctx_err", ctxErr)
 			}
 			return
 		}
@@ -196,20 +192,20 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, body []byte, path string) bool {
+func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, body []byte, path string, sessionID string) bool {
 	if s.fallback == nil {
 		return false
 	}
-	account, index, ok := s.fallback.Select()
+	account, index, ok := s.fallback.Select(sessionID)
 	if !ok {
 		return false
 	}
-	slog.Info("fallback select", "base_url", account.baseURL.String())
+	slog.Info("fallback select", "base_url", account.baseURL.String(), "session", sessionID)
 
 	resp, respBody, stream, err := s.forwardFallbackRequest(r, body, account, path)
 	if err != nil {
-		s.fallback.Report(index, false)
-		slog.Warn("fallback upstream request", "base_url", account.baseURL.String(), "err", err)
+		s.fallback.Report(sessionID, index, false)
+		slog.Warn("fallback upstream request", "base_url", account.baseURL.String(), "session", sessionID, "err", err)
 		http.Error(w, "upstream error", http.StatusBadGateway)
 		return true
 	}
@@ -217,6 +213,7 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, body []b
 	slog.Info(
 		"fallback response",
 		"base_url", account.baseURL.String(),
+		"session", sessionID,
 		"status", resp.StatusCode,
 		"content_type", resp.Header.Get("Content-Type"),
 		"stream", stream,
@@ -227,24 +224,25 @@ func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, body []b
 		slog.Info(
 			"fallback stream start",
 			"base_url", account.baseURL.String(),
+			"session", sessionID,
 			"status", resp.StatusCode,
 			"content_type", resp.Header.Get("Content-Type"),
 		)
 		written, err := streamResponse(w, resp)
 		ctxErr := r.Context().Err()
 		if err != nil {
-			slog.Warn("fallback stream end", "base_url", account.baseURL.String(), "bytes", written, "err", err, "ctx_err", ctxErr)
+			slog.Warn("fallback stream end", "base_url", account.baseURL.String(), "session", sessionID, "bytes", written, "err", err, "ctx_err", ctxErr)
 			if ctxErr == nil {
 				success = false
 			}
 		} else {
-			slog.Info("fallback stream end", "base_url", account.baseURL.String(), "bytes", written, "ctx_err", ctxErr)
+			slog.Info("fallback stream end", "base_url", account.baseURL.String(), "session", sessionID, "bytes", written, "ctx_err", ctxErr)
 		}
-		s.fallback.Report(index, success)
+		s.fallback.Report(sessionID, index, success)
 		return true
 	}
 
-	s.fallback.Report(index, success)
+	s.fallback.Report(sessionID, index, success)
 	writeResponse(w, resp, respBody)
 	return true
 }
