@@ -38,6 +38,9 @@ func loadTokensFromDir(store *TokenStore, dir string) error {
 		if !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
+		if entry.Name() == fallbackFileName {
+			continue
+		}
 		path := filepath.Join(dir, entry.Name())
 		info, err := entry.Info()
 		if err != nil {

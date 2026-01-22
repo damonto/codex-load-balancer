@@ -50,11 +50,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	fallback := NewFallbackManager(tokenDir)
+	if changed, err := fallback.Reload(); err != nil {
+		slog.Warn("fallback load", "err", err)
+	} else if changed {
+		slog.Info("fallback loaded", "accounts", fallback.AccountCount())
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	go runTokenWatcher(ctx, store, tokenDir)
 	go runUsageSyncer(ctx, store)
+	go runFallbackWatcher(ctx, fallback)
+	go runFallbackCheckinScheduler(ctx, fallback)
 
 	upstreamURL, _ := url.Parse(upstreamBaseURL)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -66,6 +75,7 @@ func main() {
 		client:       client,
 		upstreamBase: upstreamURL,
 		apiKey:       apiKey,
+		fallback:     fallback,
 	}
 
 	mux := http.NewServeMux()

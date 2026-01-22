@@ -17,6 +17,7 @@ type Server struct {
 	client       *http.Client
 	upstreamBase *url.URL
 	apiKey       string
+	fallback     *FallbackManager
 }
 
 func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
@@ -53,10 +54,21 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	forwardPath := normalizeResponsesPath(r.URL.Path)
+	policy := strings.TrimSpace(r.Header.Get("X-Account-Policy"))
+	if strings.EqualFold(policy, "fallback") {
+		if !s.handleFallback(w, r, body, forwardPath) {
+			http.Error(w, "no fallback accounts", http.StatusServiceUnavailable)
+		}
+		return
+	}
+
 	tried := make(map[string]bool)
 	for attempt := range 2 {
 		token, sticky, err := s.store.SelectToken(sessionID, tried)
 		if err != nil {
+			if s.store.LimitsExhausted() && s.handleFallback(w, r, body, forwardPath) {
+				return
+			}
 			http.Error(w, "no available tokens", http.StatusServiceUnavailable)
 			return
 		}
@@ -184,24 +196,86 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, body []byte, path string) bool {
+	if s.fallback == nil {
+		return false
+	}
+	account, index, ok := s.fallback.Select()
+	if !ok {
+		return false
+	}
+	slog.Info("fallback select", "base_url", account.baseURL.String())
+
+	resp, respBody, stream, err := s.forwardFallbackRequest(r, body, account, path)
+	if err != nil {
+		s.fallback.Report(index, false)
+		slog.Warn("fallback upstream request", "base_url", account.baseURL.String(), "err", err)
+		http.Error(w, "upstream error", http.StatusBadGateway)
+		return true
+	}
+
+	slog.Info(
+		"fallback response",
+		"base_url", account.baseURL.String(),
+		"status", resp.StatusCode,
+		"content_type", resp.Header.Get("Content-Type"),
+		"stream", stream,
+	)
+
+	success := !fallbackResponseFailed(resp, respBody, stream)
+	if stream {
+		slog.Info(
+			"fallback stream start",
+			"base_url", account.baseURL.String(),
+			"status", resp.StatusCode,
+			"content_type", resp.Header.Get("Content-Type"),
+		)
+		written, err := streamResponse(w, resp)
+		ctxErr := r.Context().Err()
+		if err != nil {
+			slog.Warn("fallback stream end", "base_url", account.baseURL.String(), "bytes", written, "err", err, "ctx_err", ctxErr)
+			if ctxErr == nil {
+				success = false
+			}
+		} else {
+			slog.Info("fallback stream end", "base_url", account.baseURL.String(), "bytes", written, "ctx_err", ctxErr)
+		}
+		s.fallback.Report(index, success)
+		return true
+	}
+
+	s.fallback.Report(index, success)
+	writeResponse(w, resp, respBody)
+	return true
+}
+
 func (s *Server) forwardRequest(r *http.Request, body []byte, token TokenState, path string) (*http.Response, []byte, bool, error) {
 	target := *s.upstreamBase
 	target.Path = joinURLPath(s.upstreamBase.Path, path)
 	target.RawQuery = r.URL.RawQuery
 
+	return s.forwardRequestWithTarget(r, body, target, token.Token, token.AccountID)
+}
+
+func (s *Server) forwardFallbackRequest(r *http.Request, body []byte, account fallbackAccount, path string) (*http.Response, []byte, bool, error) {
+	target := fallbackTargetURL(account.baseURL, path, r.URL.RawQuery)
+	return s.forwardRequestWithTarget(r, body, target, account.apiKey, "")
+}
+
+func (s *Server) forwardRequestWithTarget(r *http.Request, body []byte, target url.URL, authToken string, accountID string) (*http.Response, []byte, bool, error) {
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("build upstream request: %w", err)
 	}
 
 	req.Header = cloneHeaders(r.Header)
-	req.Header.Set("Authorization", authHeaderValue(token.Token))
-	if token.AccountID != "" && req.Header.Get("ChatGPT-Account-ID") == "" {
-		req.Header.Set("ChatGPT-Account-ID", token.AccountID)
+	req.Header.Set("Authorization", authHeaderValue(authToken))
+	if accountID != "" && req.Header.Get("ChatGPT-Account-ID") == "" {
+		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
 	req.ContentLength = r.ContentLength
 	req.TransferEncoding = append([]string(nil), r.TransferEncoding...)
-	req.Host = s.upstreamBase.Host
+	req.Host = target.Host
 
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -284,6 +358,20 @@ func normalizeResponsesPath(path string) string {
 	return path
 }
 
+func fallbackTargetURL(base *url.URL, path string, rawQuery string) url.URL {
+	target := *base
+	if !hasResponsesSuffix(base.Path) {
+		target.Path = joinURLPath(base.Path, path)
+	}
+	target.RawQuery = rawQuery
+	return target
+}
+
+func hasResponsesSuffix(path string) bool {
+	trimmed := strings.TrimSuffix(path, "/")
+	return strings.HasSuffix(trimmed, "/responses") || strings.HasSuffix(trimmed, "/v1/responses")
+}
+
 func extractSessionID(headers http.Header) string {
 	for _, key := range sessionHeaders {
 		if value := headers.Get(key); value != "" {
@@ -298,6 +386,16 @@ func isLimitError(status int, body []byte) bool {
 		return true
 	}
 	return bytes.Contains(body, []byte("You've hit your usage limit"))
+}
+
+func fallbackResponseFailed(resp *http.Response, body []byte, stream bool) bool {
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+		return true
+	}
+	if !stream && isLimitError(resp.StatusCode, body) {
+		return true
+	}
+	return false
 }
 
 func cloneHeaders(in http.Header) http.Header {

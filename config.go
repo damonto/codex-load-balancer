@@ -14,6 +14,7 @@ const (
 	watchInterval      = 10 * time.Second
 	syncInterval       = time.Minute
 	defaultLimitPoints = 100.0
+	fallbackFileName   = "fallback.json"
 )
 
 var sessionHeaders = []string{

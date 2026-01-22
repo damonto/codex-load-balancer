@@ -74,6 +74,32 @@ func (t TokenState) Available(now time.Time) bool {
 	return true
 }
 
+func (s *TokenStore) LimitsExhausted() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.tokens) == 0 {
+		return false
+	}
+	seen := false
+	for _, token := range s.tokens {
+		if token.Invalid {
+			continue
+		}
+		seen = true
+		exhausted := false
+		if token.FiveHour.Known && token.FiveHour.RemainingPoints() <= 0 {
+			exhausted = true
+		}
+		if token.Weekly.Known && token.Weekly.RemainingPoints() <= 0 {
+			exhausted = true
+		}
+		if !exhausted {
+			return false
+		}
+	}
+	return seen
+}
+
 type TokenStore struct {
 	mu        sync.RWMutex
 	tokens    map[string]*TokenState
@@ -322,17 +348,17 @@ type TokenRef struct {
 }
 
 type TokenStats struct {
-	ID                         string     `json:"id"`
-	Status                     string     `json:"status"`
-	FiveHourLimit              float64    `json:"five_hour_limit"`
-	FiveHourRemaining          float64    `json:"five_hour_remaining"`
-	FiveHourResetAt            *time.Time `json:"five_hour_reset_at"`
-	FiveHourResetAfterSeconds  *int       `json:"five_hour_reset_after_seconds"`
-	WeeklyLimit                float64    `json:"weekly_limit"`
-	WeeklyRemaining            float64    `json:"weekly_remaining"`
-	WeeklyResetAt              *time.Time `json:"weekly_reset_at"`
-	WeeklyResetAfterSeconds    *int       `json:"weekly_reset_after_seconds"`
-	LastSync                   *time.Time `json:"last_sync"`
+	ID                        string     `json:"id"`
+	Status                    string     `json:"status"`
+	FiveHourLimit             float64    `json:"five_hour_limit"`
+	FiveHourRemaining         float64    `json:"five_hour_remaining"`
+	FiveHourResetAt           *time.Time `json:"five_hour_reset_at"`
+	FiveHourResetAfterSeconds *int       `json:"five_hour_reset_after_seconds"`
+	WeeklyLimit               float64    `json:"weekly_limit"`
+	WeeklyRemaining           float64    `json:"weekly_remaining"`
+	WeeklyResetAt             *time.Time `json:"weekly_reset_at"`
+	WeeklyResetAfterSeconds   *int       `json:"weekly_reset_after_seconds"`
+	LastSync                  *time.Time `json:"last_sync"`
 }
 
 func (s *TokenStore) Stats() []TokenStats {
