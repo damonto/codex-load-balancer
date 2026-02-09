@@ -82,5 +82,4 @@ func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client) 
 		store.UpdateUsage(ref.ID, snapshot.FiveHour, snapshot.Weekly, time.Now())
 		synced++
 	}
-	slog.Info("usage sync done", "tokens", synced)
 }
