@@ -8,7 +8,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -74,7 +73,7 @@ func fetchUsage(ctx context.Context, client *http.Client, ref TokenRef) (UsageSn
 }
 
 func usageURL() string {
-	return strings.TrimRight(usageBaseURL, "/") + "/wham/usage"
+	return backendEndpoint("/wham/usage")
 }
 
 func mapUsageSnapshot(details *rateLimitStatusDetails) UsageSnapshot {

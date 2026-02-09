@@ -65,7 +65,7 @@ func main() {
 	go runFallbackWatcher(ctx, fallback)
 	go runFallbackCheckinScheduler(ctx, fallback)
 
-	upstreamURL, _ := url.Parse(upstreamBaseURL)
+	upstreamURL, _ := url.Parse(backendEndpoint("/codex"))
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = 30 * time.Second
 	client := &http.Client{Transport: transport}

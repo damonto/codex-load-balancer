@@ -1,11 +1,13 @@
 package main
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const (
 	defaultPort        = 8080
-	usageBaseURL       = "https://chatgpt.com/backend-api"
-	upstreamBaseURL    = "https://chatgpt.com/backend-api/codex"
+	backendBaseURL     = "https://chatgpt.com/backend-api"
 	refreshTokenURL    = "https://auth.openai.com/oauth/token"
 	refreshClientID    = "app_EMoamEEZ73f0CkXaXp7hrann"
 	refreshScope       = "openid profile email"
@@ -19,4 +21,12 @@ const (
 
 var sessionHeaders = []string{
 	"session_id",
+}
+
+func backendEndpoint(path string) string {
+	base := strings.TrimRight(backendBaseURL, "/")
+	if strings.HasPrefix(path, "/") {
+		return base + path
+	}
+	return base + "/" + path
 }
