@@ -1,6 +1,6 @@
-# Synapse (Codex Load Balancer)
+# Codex Load Balancer
 
-Synapse is a pragmatic reverse proxy and load balancer for Codex. It aggregates multiple ChatGPT auth tokens, keeps usage in memory, and selects the best token per request to avoid rate limits.
+Codex load balancer is a pragmatic reverse proxy and load balancer for Codex. It aggregates multiple ChatGPT auth tokens, keeps usage in memory, and selects the best token per request to avoid rate limits.
 
 ## Features
 
@@ -18,13 +18,13 @@ Synapse is a pragmatic reverse proxy and load balancer for Codex. It aggregates 
 ## Build
 
 ```bash
-go build -o synapse .
+go build -o codex-load-balancer .
 ```
 
 ## Run
 
 ```bash
-./synapse --api-key=dadada --token-dir=/data --port=8080
+./codex-load-balancer --api-key=dadada --token-dir=/data --port=8080
 ```
 
 Flags:
@@ -35,7 +35,7 @@ Flags:
 
 ## Token File Format
 
-Synapse expects Codex-style `auth.json` files. Only `tokens.access_token` is required. If `refresh_token` and `last_refresh` exist, Synapse can refresh tokens every 8 days.
+Codex load balancer expects Codex-style `auth.json` files. Only `tokens.access_token` is required. If `refresh_token` and `last_refresh` exist, Codex load balancer can refresh tokens every 8 days.
 
 Example:
 
@@ -59,11 +59,11 @@ Example:
 
 ## Session Stickiness
 
-If a request includes one of the following headers, Synapse binds that session to a token:
+If a request includes one of the following headers, Codex load balancer binds that session to a token:
 
 - `session_id`
 
-If the bound token hits a limit error, Synapse unbinds and reselects.
+If the bound token hits a limit error, Codex load balancer unbinds and reselects.
 
 ## Load Balancing Rules
 
@@ -80,7 +80,7 @@ If the upstream responds with status `429` or contains `"You've hit your usage l
 
 - Syncs at startup and every minute.
 - Uses `https://chatgpt.com/backend-api/wham/usage`.
-- On `401` during sync, Synapse attempts a refresh; if that fails permanently, the token is marked invalid.
+- On `401` during sync, Codex load balancer attempts a refresh; if that fails permanently, the token is marked invalid.
 
 ## Admin Stats
 
@@ -112,4 +112,4 @@ Response fields per token:
 
 ## Logs
 
-Synapse logs structured events via `log/slog` to stdout.
+Codex load balancer logs structured events via `log/slog` to stdout.

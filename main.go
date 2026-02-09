@@ -92,7 +92,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		slog.Info("synapse listening", "addr", addr)
+		slog.Info("codex load balancer listening", "addr", addr)
 		errCh <- srv.ListenAndServe()
 	}()
 
