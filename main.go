@@ -15,9 +15,10 @@ import (
 )
 
 var (
-	apiKey   string
-	tokenDir string
-	port     int
+	BuildVersion string
+	apiKey       string
+	tokenDir     string
+	port         int
 )
 
 func main() {
