@@ -1,0 +1,241 @@
+package main
+
+import (
+	"embed"
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"math"
+	"net/http"
+	"slices"
+	"strings"
+	"time"
+)
+
+//go:embed web/*
+var dashboardFiles embed.FS
+
+var dashboardWebFS = mustDashboardWebFS()
+var dashboardAssetHandler = http.StripPrefix("/stats/assets/", http.FileServer(http.FS(dashboardWebFS)))
+var statsHTML = mustReadDashboardFile("stats.html")
+
+type dashboardOverviewResponse struct {
+	GeneratedAt time.Time          `json:"generated_at"`
+	Today       dashboardTotals    `json:"today"`
+	ThisWeek    dashboardTotals    `json:"this_week"`
+	ThisMonth   dashboardTotals    `json:"this_month"`
+	Total       dashboardTotals    `json:"total"`
+	Accounts    []dashboardAccount `json:"accounts"`
+}
+
+type dashboardTotals struct {
+	InputTokens     int64 `json:"input_tokens"`
+	CachedTokens    int64 `json:"cached_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
+	ReasoningTokens int64 `json:"reasoning_tokens"`
+	TotalTokens     int64 `json:"total_tokens"`
+}
+
+type dashboardAccount struct {
+	AccountKey      string   `json:"account_key"`
+	Email           string   `json:"email"`
+	PlanType        string   `json:"plan_type"`
+	TokenIDs        []string `json:"token_ids"`
+	InputTokens     int64    `json:"input_tokens"`
+	CachedTokens    int64    `json:"cached_tokens"`
+	OutputTokens    int64    `json:"output_tokens"`
+	ReasoningTokens int64    `json:"reasoning_tokens"`
+	TotalTokens     int64    `json:"total_tokens"`
+	Used5hTokens    int64    `json:"used_5h_tokens"`
+	Quota5hTokens   int64    `json:"quota_5h_tokens"`
+	Has5hQuota      bool     `json:"has_5h_quota"`
+	UsedWeekTokens  int64    `json:"used_week_tokens"`
+	QuotaWeekTokens int64    `json:"quota_week_tokens"`
+	HasWeekQuota    bool     `json:"has_week_quota"`
+}
+
+type dashboardAccountResponse struct {
+	AccountKey      string       `json:"account_key"`
+	Quota5hTokens   int64        `json:"quota_5h_tokens"`
+	QuotaWeekTokens int64        `json:"quota_week_tokens"`
+	Has5hQuota      bool         `json:"has_5h_quota"`
+	HasWeekQuota    bool         `json:"has_week_quota"`
+	Daily           []UsagePoint `json:"daily"`
+	Weekly          []UsagePoint `json:"weekly"`
+	Monthly         []UsagePoint `json:"monthly"`
+}
+
+func handleDashboardAsset(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	dashboardAssetHandler.ServeHTTP(w, r)
+}
+
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(statsHTML)
+}
+
+func mustDashboardWebFS() fs.FS {
+	webFS, err := fs.Sub(dashboardFiles, "web")
+	if err != nil {
+		panic(fmt.Sprintf("sub dashboard web fs: %v", err))
+	}
+	return webFS
+}
+
+func mustReadDashboardFile(name string) []byte {
+	content, err := fs.ReadFile(dashboardWebFS, name)
+	if err != nil {
+		panic(fmt.Sprintf("read dashboard file %q: %v", name, err))
+	}
+	return content
+}
+
+func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request) {
+	if s.usageDB == nil {
+		http.Error(w, "usage database is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	periods, err := s.usageDB.GlobalPeriodTotals(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("query global period totals: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	activeAccounts := s.activeAccountTokens()
+	accountQuotaSnapshots := s.store.AccountQuotaSnapshots()
+	accountInfos := s.store.AccountInfos()
+	summaries, err := s.usageDB.ListAccountSummaries(r.Context(), activeAccounts, 0, 0)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("query account summaries: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	accounts := make([]dashboardAccount, 0, len(summaries))
+	for _, summary := range summaries {
+		info := accountInfos[summary.AccountKey]
+		account := dashboardAccount{
+			AccountKey:      summary.AccountKey,
+			Email:           info.Email,
+			PlanType:        info.PlanType,
+			TokenIDs:        summary.ActiveTokenIDs,
+			InputTokens:     summary.InputTokens,
+			CachedTokens:    summary.CachedTokens,
+			OutputTokens:    summary.OutputTokens,
+			ReasoningTokens: summary.ReasoningTokens,
+			TotalTokens:     summary.TotalTokens(),
+		}
+		if quota, ok := accountQuotaSnapshots[summary.AccountKey]; ok {
+			if quota.HasFiveHour {
+				account.Has5hQuota = true
+				account.Used5hTokens = roundFloatToInt64(quota.FiveHourUsed)
+				account.Quota5hTokens = roundFloatToInt64(quota.FiveHourMax)
+			}
+			if quota.HasWeekly {
+				account.HasWeekQuota = true
+				account.UsedWeekTokens = roundFloatToInt64(quota.WeeklyUsed)
+				account.QuotaWeekTokens = roundFloatToInt64(quota.WeeklyMax)
+			}
+			if !account.Has5hQuota && account.HasWeekQuota {
+				account.Has5hQuota = true
+				account.Used5hTokens = account.UsedWeekTokens
+				account.Quota5hTokens = account.QuotaWeekTokens
+			}
+		}
+		accounts = append(accounts, account)
+	}
+
+	totals := func(u UsageTotals) dashboardTotals {
+		return dashboardTotals{
+			InputTokens:     u.InputTokens,
+			CachedTokens:    u.CachedTokens,
+			OutputTokens:    u.OutputTokens,
+			ReasoningTokens: u.ReasoningTokens,
+			TotalTokens:     u.TotalTokens(),
+		}
+	}
+
+	resp := dashboardOverviewResponse{
+		GeneratedAt: time.Now().UTC(),
+		Today:       totals(periods.Daily),
+		ThisWeek:    totals(periods.Weekly),
+		ThisMonth:   totals(periods.Monthly),
+		Total:       totals(periods.Total),
+		Accounts:    accounts,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	if err := enc.Encode(resp); err != nil {
+		http.Error(w, "encode dashboard overview", http.StatusInternalServerError)
+	}
+}
+
+func (s *Server) handleDashboardAccount(w http.ResponseWriter, r *http.Request) {
+	if s.usageDB == nil {
+		http.Error(w, "usage database is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	accountKey := strings.TrimSpace(r.URL.Query().Get("account_key"))
+	if accountKey == "" {
+		http.Error(w, "missing account_key", http.StatusBadRequest)
+		return
+	}
+
+	daily, weekly, monthly, err := s.usageDB.AccountTrends(r.Context(), accountKey)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("query account trends: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	quota := s.store.AccountQuotaSnapshots()[accountKey]
+	quota5h := int64(0)
+	quotaWeek := int64(0)
+	if quota.HasFiveHour {
+		quota5h = roundFloatToInt64(quota.FiveHourMax)
+	}
+	if quota.HasWeekly {
+		quotaWeek = roundFloatToInt64(quota.WeeklyMax)
+	}
+
+	resp := dashboardAccountResponse{
+		AccountKey:      accountKey,
+		Has5hQuota:      quota.HasFiveHour,
+		HasWeekQuota:    quota.HasWeekly,
+		Quota5hTokens:   quota5h,
+		QuotaWeekTokens: quotaWeek,
+		Daily:           daily,
+		Weekly:          weekly,
+		Monthly:         monthly,
+	}
+	if !resp.Has5hQuota && resp.HasWeekQuota {
+		resp.Has5hQuota = true
+		resp.Quota5hTokens = resp.QuotaWeekTokens
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	if err := enc.Encode(resp); err != nil {
+		http.Error(w, "encode account dashboard", http.StatusInternalServerError)
+	}
+}
+
+func roundFloatToInt64(value float64) int64 {
+	return int64(math.Round(value))
+}
+
+func (s *Server) activeAccountTokens() map[string][]string {
+	refs := s.store.TokenRefs()
+	active := make(map[string][]string)
+	for _, ref := range refs {
+		key := accountKeyFromRef(ref)
+		active[key] = append(active[key], ref.ID)
+	}
+	for key, tokenIDs := range active {
+		slices.Sort(tokenIDs)
+		active[key] = slices.Compact(tokenIDs)
+	}
+	return active
+}

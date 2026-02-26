@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Stats Dashboard</title>
+  <link rel="stylesheet" href="/stats/assets/tailwind.css" />
+  <style>
+    :root {
+      --ink: #2f2433;
+      --muted: #9ca3af;
+    }
+
+    body {
+      background: #ffffff;
+      color: var(--ink);
+      font-family: "Manrope", "SF Pro Display", "PingFang SC", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+    }
+
+    .quota-fill {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, #fb7185, #f43f5e);
+      transition: width 260ms ease;
+    }
+
+    .quota-fill.warn {
+      background: linear-gradient(90deg, #fbbf24, #f59e0b);
+    }
+
+    .quota-fill.danger {
+      background: linear-gradient(90deg, #ef7a73, #dc4e45);
+    }
+  </style>
+</head>
+
+<body class="min-h-screen">
+  <div class="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8">
+    <header class="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-6">
+      <h1 class="text-2xl md:text-4xl font-extrabold tracking-tight">Token Usage</h1>
+      <div class="flex items-center gap-2">
+        <button id="refreshBtn" type="button"
+          class="rounded-xl px-4 py-2 text-sm font-semibold bg-rose-100 text-rose-700">Refresh</button>
+        <div id="meta" class="text-xs md:text-sm" style="color:var(--muted)">Loading...</div>
+      </div>
+    </header>
+
+    <section id="periodCards" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-8"></section>
+
+    <section>
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg md:text-xl font-bold">Accounts</h2>
+        <span id="accountCount" class="text-xs md:text-sm" style="color:var(--muted)"></span>
+      </div>
+      <div id="accounts" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
+    </section>
+  </div>
+
+  <script>
+    var detailsCache = {};
+    var dashboardState = { payload: null, accounts: [] };
+    var detailsReqSeq = 0;
+
+    function esc(v) {
+      return String(v)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function num(v) {
+      var n = Number(v);
+      if (!isFinite(n)) return 0;
+      return n;
+    }
+
+    function fmt(v) {
+      var n = num(v);
+      if (n >= 1000000) {
+        var m = (n / 1000000).toFixed(1).replace(/\.0$/, '');
+        return m + 'M';
+      }
+      return new Intl.NumberFormat().format(n);
+    }
+
+    function pick() {
+      for (var i = 0; i < arguments.length; i++) {
+        var n = num(arguments[i]);
+        if (n !== 0 || arguments[i] === 0 || arguments[i] === '0') return n;
+      }
+      return 0;
+    }
+
+    function shortAccountKey(key) {
+      var value = String(key || '');
+      if (value.length <= 22) return value;
+      return value.slice(0, 10) + '…' + value.slice(-8);
+    }
+
+    function usagePct(used, limit) {
+      if (!limit || limit <= 0) return 0;
+      return Math.min(100, Math.max(0, (used / limit) * 100));
+    }
+
+    function quotaClass(p) {
+      if (p >= 100) return 'danger';
+      if (p >= 80) return 'warn';
+      return '';
+    }
+
+    function quotaPanel(title, hasQuota, used, limit) {
+      if (!hasQuota || limit <= 0) {
+        return '' +
+          '<div class="grid gap-1">' +
+          '<div class="flex items-center justify-between gap-2 text-[11px] text-[#6b7280] tracking-[0.05em] uppercase leading-tight">' +
+          '<span>' + esc(title) + '</span><span>-</span>' +
+          '</div>' +
+          '<div class="h-[7px] rounded-full bg-rose-100 overflow-hidden"></div>' +
+          '</div>';
+      }
+      var progress = usagePct(used, limit);
+      var klass = quotaClass(progress);
+      var pct = Math.round(progress);
+      return '' +
+        '<div class="grid gap-1">' +
+        '<div class="flex items-center justify-between gap-2 text-[11px] text-[#6b7280] tracking-[0.05em] uppercase leading-tight">' +
+        '<span>' + esc(title) + '</span><span>' + pct + '%</span>' +
+        '</div>' +
+        '<div class="h-[7px] rounded-full bg-rose-100 overflow-hidden">' +
+        '<span class="quota-fill ' + klass + '" style="width:' + progress + '%"></span>' +
+        '</div>' +
+        '</div>';
+    }
+
+    /* ── period cards ── */
+    function tokenColumns(input, cached, output, reasoning, dark) {
+      var ms = dark ? 'opacity:0.75' : 'color:var(--muted)';
+      var borderCls = dark ? 'border-white/20' : 'border-gray-100';
+      return '' +
+        '<div class="grid grid-cols-2 gap-x-4 pt-3 border-t ' + borderCls + '">' +
+        '<div>' +
+        '<div class="text-[10px] uppercase tracking-wider" style="' + ms + '">Input</div>' +
+        '<div class="text-lg font-extrabold tabular-nums">' + fmt(input) + '</div>' +
+        '<div class="text-[11px]" style="' + ms + '">Cached&nbsp;' + fmt(cached) + '</div>' +
+        '</div>' +
+        '<div>' +
+        '<div class="text-[10px] uppercase tracking-wider" style="' + ms + '">Output</div>' +
+        '<div class="text-lg font-extrabold tabular-nums">' + fmt(output) + '</div>' +
+        '<div class="text-[11px]" style="' + ms + '">Reasoning&nbsp;' + fmt(reasoning) + '</div>' +
+        '</div>' +
+        '</div>';
+    }
+
+    function periodCard(label, t, dark) {
+      t = t || {};
+      var ms = dark ? 'opacity:0.75' : 'color:var(--muted)';
+      var inner =
+        '<div class="text-[11px] font-semibold tracking-widest uppercase" style="' + ms + '">' + esc(label) + '</div>' +
+        '<div class="text-[38px] leading-none tracking-[-0.02em] font-black tabular-nums my-2">' + fmt(num(t.total_tokens)) + '</div>' +
+        tokenColumns(num(t.input_tokens), num(t.cached_tokens), num(t.output_tokens), num(t.reasoning_tokens), dark);
+
+      if (dark) {
+        return '<article class="bg-gradient-to-br from-rose-400 to-rose-500 text-rose-50 border border-white/20 rounded-[1.6rem] shadow-[0_8px_32px_rgba(244,63,94,0.32)] p-5 flex flex-col">' + inner + '</article>';
+      }
+      return '<article class="bg-white border border-gray-100 rounded-[1.6rem] shadow-[0_2px_12px_rgba(0,0,0,0.07),_0_8px_32px_rgba(0,0,0,0.04)] p-5 flex flex-col">' + inner + '</article>';
+    }
+
+    function renderPeriodCards(payload) {
+      var p = payload || {};
+      var html = '';
+      html += periodCard('Today', p.today);
+      html += periodCard('This Week', p.this_week);
+      html += periodCard('This Month', p.this_month);
+      html += periodCard('Total', p.total, true);
+      document.getElementById('periodCards').innerHTML = html;
+    }
+
+    /* ── account cards ── */
+    function renderAccounts(accounts) {
+      var root = document.getElementById('accounts');
+      var countEl = document.getElementById('accountCount');
+      countEl.textContent = (accounts ? accounts.length : 0) + ' accounts';
+
+      if (!accounts || !accounts.length) {
+        root.innerHTML = '<div class="bg-white border border-gray-100 rounded-[1.6rem] shadow-[0_2px_12px_rgba(0,0,0,0.07)] p-8 text-center text-sm" style="color:var(--muted)">No accounts.</div>';
+        return;
+      }
+
+      var chipCls = 'inline-block border border-rose-200 bg-rose-50 text-rose-700 rounded-[6px] text-[11px] leading-none px-[0.45rem] py-[0.3rem] max-w-full truncate';
+
+      var html = '';
+      for (var i = 0; i < accounts.length; i++) {
+        var a = accounts[i];
+        var key = a.account_key || '';
+        var displayName = a.email || shortAccountKey(key);
+
+        var used5 = pick(a.used_5h_tokens);
+        var max5 = pick(a.quota_5h_tokens);
+        var has5 = Boolean(a.has_5h_quota);
+        var usedW = pick(a.used_week_tokens);
+        var maxW = pick(a.quota_week_tokens);
+        var hasW = Boolean(a.has_week_quota);
+        if (!has5 && hasW) { has5 = true; used5 = usedW; max5 = maxW; }
+
+        var chips = '';
+        if (a.plan_type) chips += '<span class="' + chipCls + '">' + esc(a.plan_type) + '</span>';
+        if (a.token_ids && a.token_ids.length) {
+          chips += '<span class="' + chipCls + '">' + esc(a.token_ids[0]) + '</span>';
+          if (a.token_ids.length > 1) chips += '<span class="' + chipCls + '">+' + (a.token_ids.length - 1) + '</span>';
+        } else {
+          chips = '<span class="' + chipCls + '">No token id</span>';
+        }
+
+        var reasoningRow = num(a.reasoning_tokens) > 0
+          ? '<div><div class="text-[11px] uppercase tracking-wider text-[#6b7280]">Reasoning</div><div class="text-xl font-extrabold mt-1 text-[#111827] tabular-nums">' + fmt(a.reasoning_tokens) + '</div></div>'
+          : '';
+
+        html += '' +
+          '<article class="bg-white border border-gray-100 rounded-[1.2rem] shadow-[0_2px_12px_rgba(0,0,0,0.07),_0_8px_32px_rgba(0,0,0,0.04)] p-4 grid gap-3">' +
+          '<section class="grid grid-cols-1 md:grid-cols-2 gap-3">' +
+          '<section class="min-w-0 flex flex-col gap-2">' +
+          '<div class="min-w-0">' +
+          '<h3 class="text-lg font-bold break-all text-[#111827]" title="' + esc(key) + '">' + esc(displayName) + '</h3>' +
+          '<div class="flex flex-wrap gap-[6px] mt-1">' + chips + '</div>' +
+          '</div>' +
+          '</section>' +
+          '<section class="min-w-0 grid gap-2">' +
+          quotaPanel('5h window', has5, used5, max5) +
+          quotaPanel('weekly window', hasW, usedW, maxW) +
+          '</section>' +
+          '</section>' +
+          '<section class="grid grid-cols-2 md:grid-cols-4 gap-2">' +
+          '<div><div class="text-[11px] uppercase tracking-wider text-[#6b7280]">Input</div><div class="text-xl font-extrabold mt-1 text-[#111827] tabular-nums">' + fmt(a.input_tokens) + '</div><div class="text-[11px] text-[#6b7280] mt-[2px]">Cached&nbsp;' + fmt(a.cached_tokens) + '</div></div>' +
+          '<div><div class="text-[11px] uppercase tracking-wider text-[#6b7280]">Output</div><div class="text-xl font-extrabold mt-1 text-[#111827] tabular-nums">' + fmt(a.output_tokens) + '</div><div class="text-[11px] text-[#6b7280] mt-[2px]">Reasoning&nbsp;' + fmt(a.reasoning_tokens) + '</div></div>' +
+          '<div><div class="text-[11px] uppercase tracking-wider text-[#6b7280]">Total</div><div class="text-xl font-extrabold mt-1 text-[#111827] tabular-nums">' + fmt(a.total_tokens) + '</div></div>' +
+          '</section>' +
+          '</article>';
+      }
+      root.innerHTML = html;
+    }
+
+    async function syncDetails(accounts) {
+      if (!accounts || !accounts.length) return;
+      var reqID = ++detailsReqSeq;
+      var tasks = [];
+      for (var i = 0; i < accounts.length; i++) {
+        var key = accounts[i].account_key || '';
+        if (!key || detailsCache[key]) continue;
+        tasks.push((function (k) {
+          return fetch('/stats/account?account_key=' + encodeURIComponent(k))
+            .then(function (r) { return r.json(); })
+            .then(function (d) { detailsCache[k] = d; })
+            .catch(function () { detailsCache[k] = {}; });
+        })(key));
+      }
+      if (tasks.length) await Promise.allSettled(tasks);
+      if (reqID !== detailsReqSeq) return;
+      renderAccounts(dashboardState.accounts);
+    }
+
+    async function loadOverview() {
+      var meta = document.getElementById('meta');
+      meta.textContent = 'Loading...';
+      try {
+        var resp = await fetch('/stats/overview');
+        if (!resp.ok) throw new Error(await resp.text());
+        var payload = await resp.json();
+        dashboardState.payload = payload;
+        dashboardState.accounts = payload.accounts || [];
+        renderPeriodCards(payload);
+        renderAccounts(dashboardState.accounts);
+        meta.textContent = 'Generated at ' + new Date(payload.generated_at).toLocaleString();
+        syncDetails(dashboardState.accounts);
+      } catch (err) {
+        meta.textContent = 'Load failed: ' + err.message;
+      }
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', function () {
+      detailsCache = {};
+      loadOverview();
+    });
+    loadOverview();
+  </script>
+</body>
+
+</html>

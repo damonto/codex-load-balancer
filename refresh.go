@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -41,6 +42,9 @@ type refreshResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 }
+
+// refreshHTTPClient is shared across all refresh calls to reuse TCP/TLS connections.
+var refreshHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
 func maybeRefreshToken(ctx context.Context, store *TokenStore, tokenID string) (bool, error) {
 	return maybeRefreshTokenWithMode(ctx, store, tokenID, false)
@@ -75,6 +79,12 @@ func maybeRefreshTokenWithMode(ctx context.Context, store *TokenStore, tokenID s
 	}
 	if refreshIfStale && !tokenNeedsRefresh(token.LastRefresh, time.Now()) {
 		return false, nil
+	}
+	// For forced refreshes (on 401): if another goroutine already refreshed
+	// within the debounce window, treat it as done to avoid hammering the auth
+	// endpoint with a thundering herd of concurrent 401 retries.
+	if !refreshIfStale && !token.LastRefresh.IsZero() && time.Since(token.LastRefresh) < refreshDebounce {
+		return true, nil
 	}
 
 	accessToken, refreshToken, err := refreshAccessToken(ctx, token.RefreshToken)
@@ -117,8 +127,7 @@ func refreshAccessToken(ctx context.Context, refreshToken string) (string, strin
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := refreshHTTPClient.Do(req)
 	if err != nil {
 		return "", "", refreshTokenError{
 			permanent: false,
@@ -197,8 +206,30 @@ func updateAuthFileTokens(path string, accessToken string, refreshToken string) 
 	}
 	updated = append(updated, '\n')
 
-	if err := os.WriteFile(path, updated, info.Mode().Perm()); err != nil {
-		return fmt.Errorf("write auth file: %w", err)
+	// Write to a sibling temp file then rename atomically to avoid a corrupt
+	// auth file if the process is killed mid-write.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".auth-update-*")
+	if err != nil {
+		return fmt.Errorf("create temp auth file: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(updated); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("write temp auth file: %w", err)
+	}
+	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("chmod temp auth file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp auth file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename auth file: %w", err)
 	}
 	return nil
 }

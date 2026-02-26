@@ -9,7 +9,10 @@ Codex load balancer is a pragmatic reverse proxy and load balancer for Codex. It
 - Load balancing with weekly limit priority and 5-hour health degradation.
 - Session stickiness via common headers.
 - Automatic failover on rate limit responses.
-- Admin stats endpoint protected by an API key.
+- WebSocket upgrade proxy support.
+- Per-request token usage persistence (`input` / `cached` / `output`) to SQLite.
+- Built-in web dashboard for global/account usage and quota status.
+- Stats dashboard for internal usage.
 
 ## Requirements
 
@@ -29,9 +32,10 @@ go build -o codex-load-balancer .
 
 Flags:
 
-- `--api-key` (required): API key for the admin stats endpoint.
+- `--api-key` (required): API key for protected interfaces.
 - `--token-dir` (required): Directory containing `*.json` auth files.
 - `--port` (optional): Listen port (default 8080).
+- `--usage-db` (optional): SQLite file path for usage history (default: `<token-dir>/usage.db`).
 
 ## Token File Format
 
@@ -56,6 +60,7 @@ Example:
 - `/v1/responses` is normalized to `/responses` upstream.
 - All request headers are preserved; only `Authorization` is replaced.
 - Upstream base URL: `https://chatgpt.com/backend-api/codex`.
+- WebSocket (`Upgrade: websocket`) requests are proxied through the selected token.
 
 ## Session Stickiness
 
@@ -82,33 +87,25 @@ If the upstream responds with status `429` or contains `"You've hit your usage l
 - Uses `https://chatgpt.com/backend-api/wham/usage`.
 - On `401` during sync, Codex load balancer attempts a refresh; if that fails permanently, the token is marked invalid.
 
-## Admin Stats
+## Dashboard
 
-Endpoint:
-
-```
-GET /admin/stats
-```
-
-Authentication uses the `Authorization` header with the API key:
+Endpoints:
 
 ```
-Authorization: Bearer <api-key>
+GET /stats
+GET /stats/overview?q=<search>
+GET /stats/account?account_key=<id>
 ```
 
-Response fields per token:
+Auth:
 
-- `id`
-- `status` (active/invalid/cooldown)
-- `five_hour_limit`
-- `five_hour_remaining`
-- `five_hour_reset_at`
-- `five_hour_reset_after_seconds`
-- `weekly_limit`
-- `weekly_remaining`
-- `weekly_reset_at`
-- `weekly_reset_after_seconds`
-- `last_sync`
+- No auth on `/stats*` (intended for trusted internal network only).
+
+Dashboard data:
+
+- Global totals: `input_tokens`, `cached_tokens`, `output_tokens`.
+- Account table: totals + 5-hour / weekly quota usage from usage sync (`/backend-api/wham/usage`).
+- Detail view: daily / weekly / monthly token trends.
 
 ## Logs
 

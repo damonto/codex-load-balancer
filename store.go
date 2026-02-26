@@ -1,8 +1,9 @@
 package main
 
 import (
+	"cmp"
 	"errors"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 )
@@ -49,6 +50,8 @@ type TokenState struct {
 	Path          string
 	Token         string
 	AccountID     string
+	Email         string
+	PlanType      string
 	RefreshToken  string
 	LastRefresh   time.Time
 	Invalid       bool
@@ -142,6 +145,8 @@ func (s *TokenStore) UpsertToken(token TokenState, modTime time.Time) (added boo
 
 	existing.Token = token.Token
 	existing.AccountID = token.AccountID
+	existing.Email = token.Email
+	existing.PlanType = token.PlanType
 	existing.RefreshToken = token.RefreshToken
 	existing.Path = token.Path
 	if !token.LastRefresh.IsZero() {
@@ -183,6 +188,7 @@ func (s *TokenStore) UpdateUsage(id string, fiveHour WindowUsage, weekly WindowU
 }
 
 func (s *TokenStore) UpdateCredentials(id string, accessToken string, refreshToken string) {
+	email, planType := parseJWTClaims(accessToken)
 	s.mu.Lock()
 	token, ok := s.tokens[id]
 	if ok {
@@ -191,6 +197,12 @@ func (s *TokenStore) UpdateCredentials(id string, accessToken string, refreshTok
 		token.LastRefresh = time.Now().UTC()
 		token.Invalid = false
 		token.CooldownUntil = time.Time{}
+		if email != "" {
+			token.Email = email
+		}
+		if planType != "" {
+			token.PlanType = planType
+		}
 	}
 	s.mu.Unlock()
 }
@@ -312,15 +324,19 @@ func (s *TokenStore) availableCandidates(now time.Time, tried map[string]bool) [
 }
 
 func selectBestCandidate(candidates []TokenCandidate) TokenState {
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].WeeklyLimitPoints != candidates[j].WeeklyLimitPoints {
-			return candidates[i].WeeklyLimitPoints > candidates[j].WeeklyLimitPoints
+	slices.SortStableFunc(candidates, func(a, b TokenCandidate) int {
+		if a.WeeklyLimitPoints != b.WeeklyLimitPoints {
+			return cmp.Compare(b.WeeklyLimitPoints, a.WeeklyLimitPoints)
 		}
 		// When weekly limits tie, favor higher 5-hour remaining to keep capacity available.
-		return candidates[i].FiveHourRemainingPoints > candidates[j].FiveHourRemainingPoints
+		return cmp.Compare(b.FiveHourRemainingPoints, a.FiveHourRemainingPoints)
 	})
 
 	top := candidates[0]
+	// Rescue: if the top candidate is nearly exhausted on the 5-hour window (<30%),
+	// prefer a lower-limit account that has more short-term headroom. This avoids
+	// burning through the highest-limit account's 5h window when a lesser account
+	// can service the request without pressure.
 	if top.FiveHourRemainingPercent < 0.3 {
 		bestIdx := -1
 		for i := 1; i < len(candidates); i++ {
@@ -341,6 +357,27 @@ func selectBestCandidate(candidates []TokenCandidate) TokenState {
 	return top.Token
 }
 
+type AccountInfo struct {
+	Email    string
+	PlanType string
+}
+
+func (s *TokenStore) AccountInfos() map[string]AccountInfo {
+	s.mu.RLock()
+	result := make(map[string]AccountInfo, len(s.tokens))
+	for _, token := range s.tokens {
+		if token.Invalid {
+			continue
+		}
+		key := accountKeyFromToken(*token)
+		if _, ok := result[key]; !ok {
+			result[key] = AccountInfo{Email: token.Email, PlanType: token.PlanType}
+		}
+	}
+	s.mu.RUnlock()
+	return result
+}
+
 type TokenRef struct {
 	ID        string
 	Token     string
@@ -359,6 +396,77 @@ type TokenStats struct {
 	WeeklyResetAt             *time.Time `json:"weekly_reset_at"`
 	WeeklyResetAfterSeconds   *int       `json:"weekly_reset_after_seconds"`
 	LastSync                  *time.Time `json:"last_sync"`
+}
+
+type AccountQuotaSnapshot struct {
+	HasFiveHour  bool
+	FiveHourUsed float64
+	FiveHourMax  float64
+	HasWeekly    bool
+	WeeklyUsed   float64
+	WeeklyMax    float64
+}
+
+type quotaWindowSnapshot struct {
+	hasData bool
+	used    float64
+	limit   float64
+	synced  time.Time
+}
+
+func mergeQuotaWindow(target *quotaWindowSnapshot, window WindowUsage, syncedAt time.Time) {
+	if !window.Known || window.LimitPercent <= 0 {
+		return
+	}
+	if !target.hasData || syncedAt.After(target.synced) {
+		target.hasData = true
+		target.used = window.UsedPercent
+		target.limit = window.LimitPercent
+		target.synced = syncedAt
+	}
+}
+
+func (s *TokenStore) AccountQuotaSnapshots() map[string]AccountQuotaSnapshot {
+	type quotaPair struct {
+		fiveHour quotaWindowSnapshot
+		weekly   quotaWindowSnapshot
+	}
+
+	s.mu.RLock()
+	aggregates := make(map[string]*quotaPair)
+	for _, token := range s.tokens {
+		if token.Invalid {
+			continue
+		}
+
+		accountKey := accountKeyFromToken(*token)
+		pair, ok := aggregates[accountKey]
+		if !ok {
+			pair = &quotaPair{}
+			aggregates[accountKey] = pair
+		}
+
+		mergeQuotaWindow(&pair.fiveHour, token.FiveHour, token.LastSync)
+		mergeQuotaWindow(&pair.weekly, token.Weekly, token.LastSync)
+	}
+	s.mu.RUnlock()
+
+	results := make(map[string]AccountQuotaSnapshot, len(aggregates))
+	for accountKey, pair := range aggregates {
+		snapshot := AccountQuotaSnapshot{}
+		if pair.fiveHour.hasData {
+			snapshot.HasFiveHour = true
+			snapshot.FiveHourUsed = pair.fiveHour.used
+			snapshot.FiveHourMax = pair.fiveHour.limit
+		}
+		if pair.weekly.hasData {
+			snapshot.HasWeekly = true
+			snapshot.WeeklyUsed = pair.weekly.used
+			snapshot.WeeklyMax = pair.weekly.limit
+		}
+		results[accountKey] = snapshot
+	}
+	return results
 }
 
 func (s *TokenStore) Stats() []TokenStats {

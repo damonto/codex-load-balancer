@@ -12,7 +12,8 @@ import (
 )
 
 type rateLimitStatusPayload struct {
-	RateLimit *rateLimitStatusDetails `json:"rate_limit"`
+	RateLimit            *rateLimitStatusDetails      `json:"rate_limit"`
+	AdditionalRateLimits []additionalRateLimitDetails `json:"additional_rate_limits"`
 }
 
 type rateLimitStatusDetails struct {
@@ -27,6 +28,12 @@ type rateLimitWindowSnapshot struct {
 	LimitWindowSeconds int `json:"limit_window_seconds"`
 	ResetAfterSeconds  int `json:"reset_after_seconds"`
 	ResetAt            int `json:"reset_at"`
+}
+
+type additionalRateLimitDetails struct {
+	LimitName      string                  `json:"limit_name"`
+	MeteredFeature string                  `json:"metered_feature"`
+	RateLimit      *rateLimitStatusDetails `json:"rate_limit"`
 }
 
 type UsageSnapshot struct {
@@ -69,14 +76,45 @@ func fetchUsage(ctx context.Context, client *http.Client, ref TokenRef) (UsageSn
 		return UsageSnapshot{}, fmt.Errorf("decode usage response: %w", err)
 	}
 
-	return mapUsageSnapshot(payload.RateLimit), nil
+	return mapUsageSnapshot(payload), nil
 }
 
 func usageURL() string {
 	return backendEndpoint("/wham/usage")
 }
 
-func mapUsageSnapshot(details *rateLimitStatusDetails) UsageSnapshot {
+func mapUsageSnapshot(payload rateLimitStatusPayload) UsageSnapshot {
+	detailsList := make([]*rateLimitStatusDetails, 0, 1+len(payload.AdditionalRateLimits))
+	if payload.RateLimit != nil {
+		detailsList = append(detailsList, payload.RateLimit)
+	}
+	for _, additional := range payload.AdditionalRateLimits {
+		if additional.RateLimit == nil {
+			continue
+		}
+		detailsList = append(detailsList, additional.RateLimit)
+	}
+	if len(detailsList) == 0 {
+		return UsageSnapshot{}
+	}
+
+	var snapshot UsageSnapshot
+	for _, details := range detailsList {
+		current := mapUsageSnapshotFromDetails(details)
+		if !snapshot.FiveHour.Known && current.FiveHour.Known {
+			snapshot.FiveHour = current.FiveHour
+		}
+		if !snapshot.Weekly.Known && current.Weekly.Known {
+			snapshot.Weekly = current.Weekly
+		}
+		if snapshot.FiveHour.Known && snapshot.Weekly.Known {
+			break
+		}
+	}
+	return snapshot
+}
+
+func mapUsageSnapshotFromDetails(details *rateLimitStatusDetails) UsageSnapshot {
 	if details == nil {
 		return UsageSnapshot{}
 	}
@@ -92,12 +130,49 @@ func mapUsageSnapshot(details *rateLimitStatusDetails) UsageSnapshot {
 	fiveHour, hasFiveHour := pickSnapshotWindow(windows, 18000, 14400, 21600)
 	weekly, hasWeekly := pickSnapshotWindow(windows, 604800, 518400, 691200)
 	if !hasFiveHour && !hasWeekly {
+		fiveHour, weekly, hasFiveHour, hasWeekly = fallbackSnapshotWindows(details)
+	}
+	if !hasFiveHour && !hasWeekly {
 		return UsageSnapshot{}
 	}
 	return UsageSnapshot{
 		FiveHour: fiveHour,
 		Weekly:   weekly,
 	}
+}
+
+func fallbackSnapshotWindows(details *rateLimitStatusDetails) (WindowUsage, WindowUsage, bool, bool) {
+	primary := details.PrimaryWindow
+	secondary := details.SecondaryWindow
+
+	if primary != nil && secondary != nil {
+		return windowUsageFromSnapshot(primary), windowUsageFromSnapshot(secondary), true, true
+	}
+	if secondary != nil {
+		return WindowUsage{}, windowUsageFromSnapshot(secondary), false, true
+	}
+	if primary == nil {
+		return WindowUsage{}, WindowUsage{}, false, false
+	}
+
+	if isLikelyFiveHourWindow(primary) {
+		return windowUsageFromSnapshot(primary), WindowUsage{}, true, false
+	}
+	return WindowUsage{}, windowUsageFromSnapshot(primary), false, true
+}
+
+func isLikelyFiveHourWindow(snapshot *rateLimitWindowSnapshot) bool {
+	if snapshot == nil {
+		return false
+	}
+	windowSeconds := snapshot.LimitWindowSeconds
+	if windowSeconds <= 0 {
+		windowSeconds = snapshot.ResetAfterSeconds
+	}
+	if windowSeconds <= 0 {
+		return false
+	}
+	return windowSeconds <= 12*60*60
 }
 
 func windowUsageFromSnapshot(snapshot *rateLimitWindowSnapshot) WindowUsage {

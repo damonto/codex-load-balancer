@@ -1,0 +1,12 @@
+{
+  "name": "codex-load-balancer-web",
+  "private": true,
+  "scripts": {
+    "tailwind:build": "npx @tailwindcss/cli -i ./web/tailwind.input.css -o ./web/tailwind.css --minify",
+    "tailwind:watch": "npx @tailwindcss/cli -i ./web/tailwind.input.css -o ./web/tailwind.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.13",
+    "tailwindcss": "^4.1.13"
+  }
+}

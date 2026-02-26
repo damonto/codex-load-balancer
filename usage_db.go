@@ -1,0 +1,420 @@
+package main
+
+import (
+	"cmp"
+	"context"
+	"database/sql"
+	"fmt"
+	"slices"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+type UsageRecord struct {
+	AccountKey      string
+	TokenID         string
+	Path            string
+	StatusCode      int
+	IsStream        bool
+	InputTokens     int64
+	CachedTokens    int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	CreatedAt       time.Time
+}
+
+type UsageTotals struct {
+	InputTokens     int64 `json:"input_tokens"`
+	CachedTokens    int64 `json:"cached_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
+	ReasoningTokens int64 `json:"reasoning_tokens"`
+}
+
+func (t UsageTotals) TotalTokens() int64 {
+	return t.InputTokens + t.CachedTokens + t.OutputTokens
+}
+
+type AccountUsageSummary struct {
+	AccountKey      string
+	InputTokens     int64
+	CachedTokens    int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	Used5hTokens    int64
+	UsedWeekTokens  int64
+	Quota5hTokens   int64
+	QuotaWeekTokens int64
+	ActiveTokenIDs  []string
+}
+
+func (s AccountUsageSummary) TotalTokens() int64 {
+	return s.InputTokens + s.CachedTokens + s.OutputTokens
+}
+
+type UsagePoint struct {
+	Bucket       string `json:"bucket"`
+	InputTokens  int64  `json:"input_tokens"`
+	CachedTokens int64  `json:"cached_tokens"`
+	OutputTokens int64  `json:"output_tokens"`
+}
+
+func (p UsagePoint) TotalTokens() int64 {
+	return p.InputTokens + p.CachedTokens + p.OutputTokens
+}
+
+type UsageDB struct {
+	db *sql.DB
+}
+
+func openUsageDB(path string) (*UsageDB, error) {
+	dsn := fmt.Sprintf("file:%s?mode=rwc&_journal_mode=WAL&_synchronous=NORMAL", path)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open usage db: %w", err)
+	}
+	// SQLite allows only one writer at a time; a single connection prevents
+	// "database is locked" errors under concurrent dashboard reads + sink writes.
+	db.SetMaxOpenConns(1)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping usage db: %w", err)
+	}
+
+	store := &UsageDB{db: db}
+	if err := store.initSchema(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *UsageDB) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
+func (s *UsageDB) initSchema(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS usage_events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	account_key TEXT NOT NULL,
+	token_id TEXT NOT NULL,
+	request_path TEXT NOT NULL,
+	status_code INTEGER NOT NULL,
+	is_stream INTEGER NOT NULL,
+	input_tokens INTEGER NOT NULL,
+	cached_tokens INTEGER NOT NULL,
+	output_tokens INTEGER NOT NULL,
+	created_at_unix INTEGER NOT NULL
+);
+`); err != nil {
+		return fmt.Errorf("create usage_events: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+CREATE INDEX IF NOT EXISTS idx_usage_events_account_time
+ON usage_events(account_key, created_at_unix);
+`); err != nil {
+		return fmt.Errorf("create idx_usage_events_account_time: %w", err)
+	}
+	// Idempotent column addition — ignored if already present.
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE usage_events ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0`)
+	if _, err := s.db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS account_quotas (
+	account_key TEXT PRIMARY KEY,
+	quota_5h_tokens INTEGER NOT NULL,
+	quota_week_tokens INTEGER NOT NULL,
+	updated_at_unix INTEGER NOT NULL
+);
+`); err != nil {
+		return fmt.Errorf("create account_quotas: %w", err)
+	}
+	return nil
+}
+
+func (s *UsageDB) InsertUsage(ctx context.Context, rec UsageRecord) error {
+	createdAt := rec.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO usage_events (
+	account_key,
+	token_id,
+	request_path,
+	status_code,
+	is_stream,
+	input_tokens,
+	cached_tokens,
+	output_tokens,
+	reasoning_tokens,
+	created_at_unix
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`, rec.AccountKey, rec.TokenID, rec.Path, rec.StatusCode, boolToInt(rec.IsStream), rec.InputTokens, rec.CachedTokens, rec.OutputTokens, rec.ReasoningTokens, createdAt.Unix())
+	if err != nil {
+		return fmt.Errorf("insert usage event: %w", err)
+	}
+	return nil
+}
+
+func (s *UsageDB) GlobalTotals(ctx context.Context) (UsageTotals, error) {
+	var totals UsageTotals
+	if err := s.db.QueryRowContext(ctx, `
+SELECT
+	COALESCE(SUM(input_tokens), 0),
+	COALESCE(SUM(cached_tokens), 0),
+	COALESCE(SUM(output_tokens), 0),
+	COALESCE(SUM(reasoning_tokens), 0)
+FROM usage_events
+`).Scan(&totals.InputTokens, &totals.CachedTokens, &totals.OutputTokens, &totals.ReasoningTokens); err != nil {
+		return UsageTotals{}, fmt.Errorf("query global totals: %w", err)
+	}
+	return totals, nil
+}
+
+type GlobalPeriodTotals struct {
+	Daily   UsageTotals
+	Weekly  UsageTotals
+	Monthly UsageTotals
+	Total   UsageTotals
+}
+
+func (s *UsageDB) GlobalPeriodTotals(ctx context.Context) (GlobalPeriodTotals, error) {
+	now := time.Now().UTC()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	weekStart := weekStartUTC(now)
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+	var r GlobalPeriodTotals
+	err := s.db.QueryRowContext(ctx, `
+SELECT
+	COALESCE(SUM(input_tokens), 0),
+	COALESCE(SUM(cached_tokens), 0),
+	COALESCE(SUM(output_tokens), 0),
+	COALESCE(SUM(reasoning_tokens), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN input_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN cached_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN output_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN reasoning_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN input_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN cached_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN output_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN reasoning_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN input_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN cached_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN output_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN reasoning_tokens ELSE 0 END), 0)
+FROM usage_events
+`,
+		dayStart.Unix(), dayStart.Unix(), dayStart.Unix(), dayStart.Unix(),
+		weekStart.Unix(), weekStart.Unix(), weekStart.Unix(), weekStart.Unix(),
+		monthStart.Unix(), monthStart.Unix(), monthStart.Unix(), monthStart.Unix(),
+	).Scan(
+		&r.Total.InputTokens, &r.Total.CachedTokens, &r.Total.OutputTokens, &r.Total.ReasoningTokens,
+		&r.Daily.InputTokens, &r.Daily.CachedTokens, &r.Daily.OutputTokens, &r.Daily.ReasoningTokens,
+		&r.Weekly.InputTokens, &r.Weekly.CachedTokens, &r.Weekly.OutputTokens, &r.Weekly.ReasoningTokens,
+		&r.Monthly.InputTokens, &r.Monthly.CachedTokens, &r.Monthly.OutputTokens, &r.Monthly.ReasoningTokens,
+	)
+	if err != nil {
+		return GlobalPeriodTotals{}, fmt.Errorf("query global period totals: %w", err)
+	}
+	return r, nil
+}
+
+func (s *UsageDB) quotaOverrides(ctx context.Context) (map[string]AccountQuota, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT account_key, quota_5h_tokens, quota_week_tokens
+FROM account_quotas
+`)
+	if err != nil {
+		return nil, fmt.Errorf("query account quota overrides: %w", err)
+	}
+	defer rows.Close()
+
+	overrides := make(map[string]AccountQuota)
+	for rows.Next() {
+		var accountKey string
+		var quota5h int64
+		var quotaWeek int64
+		if err := rows.Scan(&accountKey, &quota5h, &quotaWeek); err != nil {
+			return nil, fmt.Errorf("scan account quota override: %w", err)
+		}
+		overrides[accountKey] = AccountQuota{
+			Quota5hTokens:   quota5h,
+			QuotaWeekTokens: quotaWeek,
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate account quota overrides: %w", err)
+	}
+	return overrides, nil
+}
+
+func (s *UsageDB) accountSummaries(ctx context.Context, cutoff5h time.Time, cutoffWeek time.Time) (map[string]*AccountUsageSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+	account_key,
+	COALESCE(SUM(input_tokens), 0),
+	COALESCE(SUM(cached_tokens), 0),
+	COALESCE(SUM(output_tokens), 0),
+	COALESCE(SUM(reasoning_tokens), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN input_tokens + cached_tokens + output_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN input_tokens + cached_tokens + output_tokens ELSE 0 END), 0)
+FROM usage_events
+GROUP BY account_key
+`, cutoff5h.Unix(), cutoffWeek.Unix())
+	if err != nil {
+		return nil, fmt.Errorf("query account summaries: %w", err)
+	}
+	defer rows.Close()
+
+	summaries := make(map[string]*AccountUsageSummary)
+	for rows.Next() {
+		summary := &AccountUsageSummary{}
+		if err := rows.Scan(
+			&summary.AccountKey,
+			&summary.InputTokens,
+			&summary.CachedTokens,
+			&summary.OutputTokens,
+			&summary.ReasoningTokens,
+			&summary.Used5hTokens,
+			&summary.UsedWeekTokens,
+		); err != nil {
+			return nil, fmt.Errorf("scan account summary: %w", err)
+		}
+		summaries[summary.AccountKey] = summary
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate account summaries: %w", err)
+	}
+	return summaries, nil
+}
+
+func (s *UsageDB) ListAccountSummaries(
+	ctx context.Context,
+	activeAccountTokens map[string][]string,
+	quota5hDefault int64,
+	quotaWeekDefault int64,
+) ([]AccountUsageSummary, error) {
+	cutoff5h := time.Now().UTC().Add(-5 * time.Hour)
+	cutoffWeek := weekStartUTC(time.Now().UTC())
+
+	summariesByAccount, err := s.accountSummaries(ctx, cutoff5h, cutoffWeek)
+	if err != nil {
+		return nil, err
+	}
+	overrides, err := s.quotaOverrides(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	for accountKey, tokenIDs := range activeAccountTokens {
+		summary, ok := summariesByAccount[accountKey]
+		if !ok {
+			summary = &AccountUsageSummary{AccountKey: accountKey}
+			summariesByAccount[accountKey] = summary
+		}
+		summary.ActiveTokenIDs = append(summary.ActiveTokenIDs, tokenIDs...)
+	}
+
+	results := make([]AccountUsageSummary, 0, len(summariesByAccount))
+	for accountKey, summary := range summariesByAccount {
+		override, ok := overrides[accountKey]
+		if ok {
+			summary.Quota5hTokens = override.Quota5hTokens
+			summary.QuotaWeekTokens = override.QuotaWeekTokens
+		}
+		if summary.Quota5hTokens <= 0 {
+			summary.Quota5hTokens = quota5hDefault
+		}
+		if summary.QuotaWeekTokens <= 0 {
+			summary.QuotaWeekTokens = quotaWeekDefault
+		}
+
+		slices.Sort(summary.ActiveTokenIDs)
+		summary.ActiveTokenIDs = slices.Compact(summary.ActiveTokenIDs)
+		results = append(results, *summary)
+	}
+
+	slices.SortFunc(results, func(a, b AccountUsageSummary) int {
+		if a.TotalTokens() != b.TotalTokens() {
+			return cmp.Compare(b.TotalTokens(), a.TotalTokens())
+		}
+		return cmp.Compare(a.AccountKey, b.AccountKey)
+	})
+	return results, nil
+}
+
+func (s *UsageDB) AccountTrends(ctx context.Context, accountKey string) ([]UsagePoint, []UsagePoint, []UsagePoint, error) {
+	daily, err := s.queryTrend(ctx, accountKey, "%Y-%m-%d", 30)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	weekly, err := s.queryTrend(ctx, accountKey, "%Y-W%W", 16)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	monthly, err := s.queryTrend(ctx, accountKey, "%Y-%m", 12)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return daily, weekly, monthly, nil
+}
+
+func (s *UsageDB) queryTrend(ctx context.Context, accountKey string, format string, limit int) ([]UsagePoint, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+	strftime(?, created_at_unix, 'unixepoch') AS bucket,
+	COALESCE(SUM(input_tokens), 0),
+	COALESCE(SUM(cached_tokens), 0),
+	COALESCE(SUM(output_tokens), 0)
+FROM usage_events
+WHERE account_key = ?
+GROUP BY bucket
+ORDER BY bucket DESC
+LIMIT ?
+`, format, accountKey, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query trend: %w", err)
+	}
+	defer rows.Close()
+
+	points := make([]UsagePoint, 0, limit)
+	for rows.Next() {
+		var point UsagePoint
+		if err := rows.Scan(&point.Bucket, &point.InputTokens, &point.CachedTokens, &point.OutputTokens); err != nil {
+			return nil, fmt.Errorf("scan trend point: %w", err)
+		}
+		points = append(points, point)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate trend points: %w", err)
+	}
+	slices.Reverse(points)
+	return points, nil
+}
+
+type AccountQuota struct {
+	Quota5hTokens   int64
+	QuotaWeekTokens int64
+}
+
+func weekStartUTC(now time.Time) time.Time {
+	now = now.UTC()
+	weekday := int(now.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	daysSinceMonday := weekday - 1
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	return dayStart.AddDate(0, 0, -daysSinceMonday)
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
