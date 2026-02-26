@@ -399,19 +399,25 @@ type TokenStats struct {
 }
 
 type AccountQuotaSnapshot struct {
-	HasFiveHour  bool
-	FiveHourUsed float64
-	FiveHourMax  float64
-	HasWeekly    bool
-	WeeklyUsed   float64
-	WeeklyMax    float64
+	HasFiveHour               bool
+	FiveHourUsed              float64
+	FiveHourMax               float64
+	FiveHourResetAt           time.Time
+	FiveHourResetAfterSeconds int
+	HasWeekly                 bool
+	WeeklyUsed                float64
+	WeeklyMax                 float64
+	WeeklyResetAt             time.Time
+	WeeklyResetAfterSeconds   int
 }
 
 type quotaWindowSnapshot struct {
-	hasData bool
-	used    float64
-	limit   float64
-	synced  time.Time
+	hasData           bool
+	used              float64
+	limit             float64
+	resetAt           time.Time
+	resetAfterSeconds int
+	synced            time.Time
 }
 
 func mergeQuotaWindow(target *quotaWindowSnapshot, window WindowUsage, syncedAt time.Time) {
@@ -422,6 +428,8 @@ func mergeQuotaWindow(target *quotaWindowSnapshot, window WindowUsage, syncedAt 
 		target.hasData = true
 		target.used = window.UsedPercent
 		target.limit = window.LimitPercent
+		target.resetAt = window.ResetAt
+		target.resetAfterSeconds = window.ResetAfterSeconds
 		target.synced = syncedAt
 	}
 }
@@ -458,11 +466,21 @@ func (s *TokenStore) AccountQuotaSnapshots() map[string]AccountQuotaSnapshot {
 			snapshot.HasFiveHour = true
 			snapshot.FiveHourUsed = pair.fiveHour.used
 			snapshot.FiveHourMax = pair.fiveHour.limit
+			snapshot.FiveHourResetAt = pair.fiveHour.resetAt
+			snapshot.FiveHourResetAfterSeconds = pair.fiveHour.resetAfterSeconds
+			if snapshot.FiveHourResetAt.IsZero() && snapshot.FiveHourResetAfterSeconds > 0 && !pair.fiveHour.synced.IsZero() {
+				snapshot.FiveHourResetAt = pair.fiveHour.synced.Add(time.Duration(snapshot.FiveHourResetAfterSeconds) * time.Second)
+			}
 		}
 		if pair.weekly.hasData {
 			snapshot.HasWeekly = true
 			snapshot.WeeklyUsed = pair.weekly.used
 			snapshot.WeeklyMax = pair.weekly.limit
+			snapshot.WeeklyResetAt = pair.weekly.resetAt
+			snapshot.WeeklyResetAfterSeconds = pair.weekly.resetAfterSeconds
+			if snapshot.WeeklyResetAt.IsZero() && snapshot.WeeklyResetAfterSeconds > 0 && !pair.weekly.synced.IsZero() {
+				snapshot.WeeklyResetAt = pair.weekly.synced.Add(time.Duration(snapshot.WeeklyResetAfterSeconds) * time.Second)
+			}
 		}
 		results[accountKey] = snapshot
 	}

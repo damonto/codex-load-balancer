@@ -37,21 +37,23 @@ type dashboardTotals struct {
 }
 
 type dashboardAccount struct {
-	AccountKey      string   `json:"account_key"`
-	Email           string   `json:"email"`
-	PlanType        string   `json:"plan_type"`
-	TokenIDs        []string `json:"token_ids"`
-	InputTokens     int64    `json:"input_tokens"`
-	CachedTokens    int64    `json:"cached_tokens"`
-	OutputTokens    int64    `json:"output_tokens"`
-	ReasoningTokens int64    `json:"reasoning_tokens"`
-	TotalTokens     int64    `json:"total_tokens"`
-	Used5hTokens    int64    `json:"used_5h_tokens"`
-	Quota5hTokens   int64    `json:"quota_5h_tokens"`
-	Has5hQuota      bool     `json:"has_5h_quota"`
-	UsedWeekTokens  int64    `json:"used_week_tokens"`
-	QuotaWeekTokens int64    `json:"quota_week_tokens"`
-	HasWeekQuota    bool     `json:"has_week_quota"`
+	AccountKey      string     `json:"account_key"`
+	Email           string     `json:"email"`
+	PlanType        string     `json:"plan_type"`
+	TokenIDs        []string   `json:"token_ids"`
+	InputTokens     int64      `json:"input_tokens"`
+	CachedTokens    int64      `json:"cached_tokens"`
+	OutputTokens    int64      `json:"output_tokens"`
+	ReasoningTokens int64      `json:"reasoning_tokens"`
+	TotalTokens     int64      `json:"total_tokens"`
+	Used5hTokens    int64      `json:"used_5h_tokens"`
+	Quota5hTokens   int64      `json:"quota_5h_tokens"`
+	Has5hQuota      bool       `json:"has_5h_quota"`
+	FiveHourResetAt *time.Time `json:"five_hour_reset_at"`
+	UsedWeekTokens  int64      `json:"used_week_tokens"`
+	QuotaWeekTokens int64      `json:"quota_week_tokens"`
+	HasWeekQuota    bool       `json:"has_week_quota"`
+	WeeklyResetAt   *time.Time `json:"weekly_reset_at"`
 }
 
 type dashboardAccountResponse struct {
@@ -59,7 +61,9 @@ type dashboardAccountResponse struct {
 	Quota5hTokens   int64        `json:"quota_5h_tokens"`
 	QuotaWeekTokens int64        `json:"quota_week_tokens"`
 	Has5hQuota      bool         `json:"has_5h_quota"`
+	FiveHourResetAt *time.Time   `json:"five_hour_reset_at"`
 	HasWeekQuota    bool         `json:"has_week_quota"`
+	WeeklyResetAt   *time.Time   `json:"weekly_reset_at"`
 	Daily           []UsagePoint `json:"daily"`
 	Weekly          []UsagePoint `json:"weekly"`
 	Monthly         []UsagePoint `json:"monthly"`
@@ -131,16 +135,19 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 				account.Has5hQuota = true
 				account.Used5hTokens = roundFloatToInt64(quota.FiveHourUsed)
 				account.Quota5hTokens = roundFloatToInt64(quota.FiveHourMax)
+				account.FiveHourResetAt = optionalTime(quota.FiveHourResetAt)
 			}
 			if quota.HasWeekly {
 				account.HasWeekQuota = true
 				account.UsedWeekTokens = roundFloatToInt64(quota.WeeklyUsed)
 				account.QuotaWeekTokens = roundFloatToInt64(quota.WeeklyMax)
+				account.WeeklyResetAt = optionalTime(quota.WeeklyResetAt)
 			}
 			if !account.Has5hQuota && account.HasWeekQuota {
 				account.Has5hQuota = true
 				account.Used5hTokens = account.UsedWeekTokens
 				account.Quota5hTokens = account.QuotaWeekTokens
+				account.FiveHourResetAt = account.WeeklyResetAt
 			}
 		}
 		accounts = append(accounts, account)
@@ -203,7 +210,9 @@ func (s *Server) handleDashboardAccount(w http.ResponseWriter, r *http.Request) 
 	resp := dashboardAccountResponse{
 		AccountKey:      accountKey,
 		Has5hQuota:      quota.HasFiveHour,
+		FiveHourResetAt: optionalTime(quota.FiveHourResetAt),
 		HasWeekQuota:    quota.HasWeekly,
+		WeeklyResetAt:   optionalTime(quota.WeeklyResetAt),
 		Quota5hTokens:   quota5h,
 		QuotaWeekTokens: quotaWeek,
 		Daily:           daily,
@@ -213,6 +222,7 @@ func (s *Server) handleDashboardAccount(w http.ResponseWriter, r *http.Request) 
 	if !resp.Has5hQuota && resp.HasWeekQuota {
 		resp.Has5hQuota = true
 		resp.Quota5hTokens = resp.QuotaWeekTokens
+		resp.FiveHourResetAt = resp.WeeklyResetAt
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -224,6 +234,14 @@ func (s *Server) handleDashboardAccount(w http.ResponseWriter, r *http.Request) 
 
 func roundFloatToInt64(value float64) int64 {
 	return int64(math.Round(value))
+}
+
+func optionalTime(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	t := value
+	return &t
 }
 
 func (s *Server) activeAccountTokens() map[string][]string {

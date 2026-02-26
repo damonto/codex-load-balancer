@@ -73,6 +73,18 @@
       return value.slice(0, 10) + '…' + value.slice(-8);
     }
 
+    function formatResetAt(value) {
+      if (!value) return '-';
+      var ts = new Date(value);
+      if (isNaN(ts.getTime())) return '-';
+      return ts.toLocaleString(undefined, {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    }
+
     function usagePct(used, limit) {
       if (!limit || limit <= 0) return 0;
       return Math.min(100, Math.max(0, (used / limit) * 100));
@@ -84,26 +96,33 @@
       return 'from-rose-400 to-rose-500';
     }
 
-    function quotaPanel(title, hasQuota, used, limit) {
+    function quotaPanel(title, hasQuota, used, limit, resetAt) {
+      var resetText = formatResetAt(resetAt);
       if (!hasQuota || limit <= 0) {
         return '' +
-          '<div class="grid gap-1">' +
-          '<div class="flex items-center justify-between gap-2 text-[11px] tracking-[0.05em] uppercase leading-tight text-gray-500 dark:text-slate-400">' +
-          '<span>' + esc(title) + '</span><span>-</span>' +
+          '<div class="grid gap-0.5">' +
+          '<div class="flex items-center gap-2 text-[11px] tracking-[0.05em] uppercase leading-tight text-gray-500 dark:text-slate-400">' +
+          '<span>' + esc(title) + '</span><span class="ml-auto normal-case tracking-normal text-right">Reset ' + esc(resetText) + '</span>' +
           '</div>' +
-          '<div class="h-[7px] rounded-full bg-rose-100 dark:bg-slate-700 overflow-hidden"></div>' +
+          '<div class="flex items-center gap-1.5">' +
+          '<div class="h-[7px] flex-1 rounded-full bg-rose-100 dark:bg-slate-700 overflow-hidden"></div>' +
+          '<span class="shrink-0 text-[11px] text-gray-500 dark:text-slate-400">-</span>' +
+          '</div>' +
           '</div>';
       }
       var progress = usagePct(used, limit);
       var fillCls = quotaClass(progress);
       var pct = Math.round(progress);
       return '' +
-        '<div class="grid gap-1">' +
-        '<div class="flex items-center justify-between gap-2 text-[11px] tracking-[0.05em] uppercase leading-tight text-gray-500 dark:text-slate-400">' +
-        '<span>' + esc(title) + '</span><span>' + pct + '%</span>' +
+        '<div class="grid gap-0.5">' +
+        '<div class="flex items-center gap-2 text-[11px] tracking-[0.05em] uppercase leading-tight text-gray-500 dark:text-slate-400">' +
+        '<span>' + esc(title) + '</span><span class="ml-auto normal-case tracking-normal text-right">Reset ' + esc(resetText) + '</span>' +
         '</div>' +
-        '<div class="h-[7px] rounded-full bg-rose-100 dark:bg-slate-700 overflow-hidden">' +
+        '<div class="flex items-center gap-1.5">' +
+        '<div class="h-[7px] flex-1 rounded-full bg-rose-100 dark:bg-slate-700 overflow-hidden">' +
         '<span class="block h-full w-0 bg-gradient-to-r transition-[width] duration-300 ease-out ' + fillCls + '" style="width:' + progress + '%"></span>' +
+        '</div>' +
+        '<span class="shrink-0 text-[11px] text-gray-500 dark:text-slate-400">' + pct + '%</span>' +
         '</div>' +
         '</div>';
     }
@@ -176,7 +195,10 @@
         var usedW = pick(a.used_week_tokens);
         var maxW = pick(a.quota_week_tokens);
         var hasW = Boolean(a.has_week_quota);
+        var reset5 = a.five_hour_reset_at;
+        var resetW = a.weekly_reset_at;
         if (!has5 && hasW) { has5 = true; used5 = usedW; max5 = maxW; }
+        if (!reset5 && resetW) reset5 = resetW;
 
         var chips = '';
         if (a.plan_type) chips += '<span class="' + chipCls + '">' + esc(a.plan_type) + '</span>';
@@ -188,23 +210,23 @@
         }
 
         html += '' +
-          '<article class="bg-white dark:bg-slate-900 border border-gray-100 dark:border-slate-700 rounded-[1.2rem] shadow-[0_2px_12px_rgba(0,0,0,0.07),_0_8px_32px_rgba(0,0,0,0.04)] dark:shadow-[0_10px_28px_rgba(0,0,0,0.35)] p-4 grid gap-3">' +
-          '<section class="grid grid-cols-1 md:grid-cols-2 gap-3">' +
-          '<section class="min-w-0 flex flex-col gap-2">' +
+          '<article class="bg-white dark:bg-slate-900 border border-gray-100 dark:border-slate-700 rounded-[1.2rem] shadow-[0_2px_12px_rgba(0,0,0,0.07),_0_8px_32px_rgba(0,0,0,0.04)] dark:shadow-[0_10px_28px_rgba(0,0,0,0.35)] p-3 grid gap-2">' +
+          '<section class="grid grid-cols-1 md:grid-cols-2 gap-2">' +
+          '<section class="min-w-0 flex flex-col gap-1">' +
           '<div class="min-w-0">' +
           '<h3 class="text-lg font-bold break-all text-slate-900 dark:text-slate-200" title="' + esc(key) + '">' + esc(displayName) + '</h3>' +
-          '<div class="flex flex-wrap gap-[6px] mt-1">' + chips + '</div>' +
+          '<div class="flex flex-wrap gap-[6px] mt-0.5">' + chips + '</div>' +
           '</div>' +
           '</section>' +
-          '<section class="min-w-0 grid gap-2">' +
-          quotaPanel('5h window', has5, used5, max5) +
-          quotaPanel('weekly window', hasW, usedW, maxW) +
+          '<section class="min-w-0 grid gap-1">' +
+          quotaPanel('5h window', has5, used5, max5, reset5) +
+          quotaPanel('weekly window', hasW, usedW, maxW, resetW) +
           '</section>' +
           '</section>' +
-          '<section class="grid grid-cols-2 md:grid-cols-4 gap-2">' +
-          '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Input</div><div class="text-xl font-extrabold mt-1 tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.input_tokens) + '</div><div class="text-[11px] mt-[2px] text-gray-500 dark:text-slate-400">Cached&nbsp;' + fmt(a.cached_tokens) + '</div></div>' +
-          '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Output</div><div class="text-xl font-extrabold mt-1 tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.output_tokens) + '</div><div class="text-[11px] mt-[2px] text-gray-500 dark:text-slate-400">Reasoning&nbsp;' + fmt(a.reasoning_tokens) + '</div></div>' +
-          '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Total</div><div class="text-xl font-extrabold mt-1 tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.total_tokens) + '</div></div>' +
+          '<section class="grid grid-cols-2 md:grid-cols-3 gap-1.5">' +
+          '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Input</div><div class="flex items-baseline gap-1 mt-0.5"><span class="text-xl font-extrabold tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.input_tokens) + '</span><span class="text-[11px] text-gray-500 dark:text-slate-400">(Cached: ' + fmt(a.cached_tokens) + ')</span></div></div>' +
+          '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Output</div><div class="flex items-baseline gap-1 mt-0.5"><span class="text-xl font-extrabold tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.output_tokens) + '</span><span class="text-[11px] text-gray-500 dark:text-slate-400">(Reasoning: ' + fmt(a.reasoning_tokens) + ')</span></div></div>' +
+          '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Total</div><div class="text-xl font-extrabold mt-0.5 tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.total_tokens) + '</div></div>' +
           '</section>' +
           '</article>';
       }
