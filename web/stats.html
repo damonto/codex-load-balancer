@@ -5,7 +5,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Stats Dashboard</title>
-  <link rel="stylesheet" href="/stats/assets/tailwind.css" />
+  <link rel="stylesheet" href="stats/assets/tailwind.css" />
   <style>
     :root {
       --ink: #2f2433;
@@ -251,7 +251,7 @@
         var key = accounts[i].account_key || '';
         if (!key || detailsCache[key]) continue;
         tasks.push((function (k) {
-          return fetch('/stats/account?account_key=' + encodeURIComponent(k))
+          return fetch('stats/account?account_key=' + encodeURIComponent(k))
             .then(function (r) { return r.json(); })
             .then(function (d) { detailsCache[k] = d; })
             .catch(function () { detailsCache[k] = {}; });
@@ -266,7 +266,7 @@
       var meta = document.getElementById('meta');
       meta.textContent = 'Loading...';
       try {
-        var resp = await fetch('/stats/overview');
+        var resp = await fetch('stats/overview');
         if (!resp.ok) throw new Error(await resp.text());
         var payload = await resp.json();
         dashboardState.payload = payload;
