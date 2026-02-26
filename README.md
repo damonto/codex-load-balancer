@@ -27,15 +27,15 @@ go build -o codex-load-balancer .
 ## Run
 
 ```bash
-./codex-load-balancer --api-key=dadada --token-dir=/data --port=8080
+./codex-load-balancer --api-key=dadada --data-dir=/data --port=8080
 ```
 
 Flags:
 
 - `--api-key` (required): API key for protected interfaces.
-- `--token-dir` (required): Directory containing `*.json` auth files.
+- `--data-dir` (required): Directory containing `*.json` auth files.
 - `--port` (optional): Listen port (default 8080).
-- `--usage-db` (optional): SQLite file path for usage history (default: `<token-dir>/usage.db`).
+- `--usage-db` (optional): SQLite file path for usage history (default: `<data-dir>/usage.db`).
 
 ## Token File Format
 

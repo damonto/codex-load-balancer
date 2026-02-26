@@ -18,41 +18,41 @@ import (
 var (
 	BuildVersion string
 	apiKey       string
-	tokenDir     string
+	dataDir      string
 	port         int
 	usageDBPath  string
 )
 
 func main() {
 	flag.StringVar(&apiKey, "api-key", "", "API key for admin endpoints")
-	flag.StringVar(&tokenDir, "token-dir", "", "directory with auth.json files")
+	flag.StringVar(&dataDir, "data-dir", "", "directory with auth.json files")
 	flag.IntVar(&port, "port", defaultPort, "port to listen on")
-	flag.StringVar(&usageDBPath, "usage-db", "", "sqlite file path for token usage stats (default: <token-dir>/usage.db)")
+	flag.StringVar(&usageDBPath, "usage-db", "", "sqlite file path for token usage stats (default: <data-dir>/usage.db)")
 	flag.Parse()
 
 	if apiKey == "" {
 		slog.Error("missing --api-key")
 		os.Exit(1)
 	}
-	if tokenDir == "" {
-		slog.Error("missing --token-dir")
+	if dataDir == "" {
+		slog.Error("missing --data-dir")
 		os.Exit(1)
 	}
-	info, err := os.Stat(tokenDir)
+	info, err := os.Stat(dataDir)
 	if err != nil {
-		slog.Error("stat --token-dir", "err", err)
+		slog.Error("stat --data-dir", "err", err)
 		os.Exit(1)
 	}
 	if !info.IsDir() {
-		slog.Error("--token-dir is not a directory")
+		slog.Error("--data-dir is not a directory")
 		os.Exit(1)
 	}
 	if usageDBPath == "" {
-		usageDBPath = filepath.Join(tokenDir, "usage.db")
+		usageDBPath = filepath.Join(dataDir, "usage.db")
 	}
 
 	store := NewTokenStore()
-	if err := loadTokensFromDir(store, tokenDir); err != nil {
+	if err := loadTokensFromDir(store, dataDir); err != nil {
 		slog.Error("initial token load", "err", err)
 		os.Exit(1)
 	}
@@ -74,7 +74,7 @@ func main() {
 	defer usageSink.Wait()
 	defer stop()
 
-	go runTokenWatcher(ctx, store, tokenDir)
+	go runTokenWatcher(ctx, store, dataDir)
 	go runUsageSyncer(ctx, store)
 
 	upstreamURL, err := url.Parse(backendEndpoint("/codex"))
