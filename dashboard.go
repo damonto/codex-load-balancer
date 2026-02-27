@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"math"
 	"net/http"
 	"slices"
@@ -17,7 +18,7 @@ var dashboardFiles embed.FS
 
 var dashboardWebFS = mustDashboardWebFS()
 var dashboardAssetHandler = http.StripPrefix("/stats/assets/", http.FileServer(http.FS(dashboardWebFS)))
-var statsHTML = mustReadDashboardFile("stats.html")
+var indexHTML = mustReadDashboardFile("index.html")
 
 type dashboardOverviewResponse struct {
 	GeneratedAt time.Time          `json:"generated_at"`
@@ -70,13 +71,14 @@ type dashboardAccountResponse struct {
 }
 
 func handleDashboardAsset(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
 	dashboardAssetHandler.ServeHTTP(w, r)
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(statsHTML)
+	if _, err := w.Write(indexHTML); err != nil {
+		slog.Warn("write dashboard page", "err", err)
+	}
 }
 
 func mustDashboardWebFS() fs.FS {
@@ -103,7 +105,8 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 
 	periods, err := s.usageDB.GlobalPeriodTotals(r.Context())
 	if err != nil {
-		http.Error(w, fmt.Sprintf("query global period totals: %v", err), http.StatusInternalServerError)
+		slog.Warn("query global period totals", "err", err)
+		http.Error(w, "query global period totals", http.StatusInternalServerError)
 		return
 	}
 
@@ -112,7 +115,8 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 	accountInfos := s.store.AccountInfos()
 	summaries, err := s.usageDB.ListAccountSummaries(r.Context(), activeAccounts, 0, 0)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("query account summaries: %v", err), http.StatusInternalServerError)
+		slog.Warn("query account summaries", "err", err)
+		http.Error(w, "query account summaries", http.StatusInternalServerError)
 		return
 	}
 
@@ -172,10 +176,10 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 		Accounts:    accounts,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	enc := json.NewEncoder(w)
 	if err := enc.Encode(resp); err != nil {
-		http.Error(w, "encode dashboard overview", http.StatusInternalServerError)
+		slog.Warn("encode dashboard overview", "err", err)
 	}
 }
 
@@ -193,7 +197,8 @@ func (s *Server) handleDashboardAccount(w http.ResponseWriter, r *http.Request) 
 
 	daily, weekly, monthly, err := s.usageDB.AccountTrends(r.Context(), accountKey)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("query account trends: %v", err), http.StatusInternalServerError)
+		slog.Warn("query account trends", "account", accountKey, "err", err)
+		http.Error(w, "query account trends", http.StatusInternalServerError)
 		return
 	}
 
@@ -225,10 +230,10 @@ func (s *Server) handleDashboardAccount(w http.ResponseWriter, r *http.Request) 
 		resp.FiveHourResetAt = resp.WeeklyResetAt
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	enc := json.NewEncoder(w)
 	if err := enc.Encode(resp); err != nil {
-		http.Error(w, "encode account dashboard", http.StatusInternalServerError)
+		slog.Warn("encode account dashboard", "account", accountKey, "err", err)
 	}
 }
 

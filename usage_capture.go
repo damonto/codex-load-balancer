@@ -9,11 +9,16 @@ import (
 )
 
 type TokenUsage struct {
-	InputTokens    int64 `json:"input_tokens"`
-	CachedTokens   int64 `json:"cached_tokens"`
-	OutputTokens   int64 `json:"output_tokens"`
+	InputTokens     int64 `json:"input_tokens"`
+	CachedTokens    int64 `json:"cached_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
 	ReasoningTokens int64 `json:"reasoning_tokens"`
 }
+
+var sseDataPrefix = []byte("data:")
+var sseEventPrefix = []byte("event:")
+var sseResponseCompletedEvent = []byte("response.completed")
+var sseDonePayload = []byte("[DONE]")
 
 func (u TokenUsage) TotalTokens() int64 {
 	return u.InputTokens + u.CachedTokens + u.OutputTokens
@@ -38,17 +43,18 @@ func (s *Server) recordTokenUsage(token TokenState, path string, statusCode int,
 }
 
 func accountKeyFromToken(token TokenState) string {
-	if value := strings.TrimSpace(token.AccountID); value != "" {
-		return value
-	}
-	return token.ID
+	return accountKey(token.AccountID, token.ID)
 }
 
 func accountKeyFromRef(ref TokenRef) string {
-	if value := strings.TrimSpace(ref.AccountID); value != "" {
+	return accountKey(ref.AccountID, ref.ID)
+}
+
+func accountKey(accountID string, fallbackID string) string {
+	if value := strings.TrimSpace(accountID); value != "" {
 		return value
 	}
-	return ref.ID
+	return fallbackID
 }
 
 func extractTokenUsageFromBody(body []byte) (TokenUsage, bool) {
@@ -56,7 +62,9 @@ func extractTokenUsageFromBody(body []byte) (TokenUsage, bool) {
 		return usage, ok
 	}
 	capture := newSSEUsageCapture()
-	_, _ = capture.Write(body)
+	if _, err := capture.Write(body); err != nil {
+		return TokenUsage{}, false
+	}
 	return capture.Usage()
 }
 
@@ -130,11 +138,7 @@ func usageFromEnvelope(envelope usageEnvelope) (TokenUsage, bool) {
 		input = 0
 	}
 
-	output := derefInt64(usage.OutputTokens)
-	if output < 0 {
-		output = 0
-	}
-
+	output := max(derefInt64(usage.OutputTokens), 0)
 	reasoning := int64(0)
 	if usage.OutputTokensDetails != nil {
 		reasoning = derefInt64(usage.OutputTokensDetails.ReasoningTokens)
@@ -159,9 +163,10 @@ func derefInt64(value *int64) int64 {
 }
 
 type sseUsageCapture struct {
-	buffer bytes.Buffer
-	usage  TokenUsage
-	found  bool
+	buffer       bytes.Buffer
+	currentEvent []byte
+	usage        TokenUsage
+	found        bool
 }
 
 func newSSEUsageCapture() *sseUsageCapture {
@@ -177,21 +182,35 @@ func (c *sseUsageCapture) Write(p []byte) (int, error) {
 		line, err := c.buffer.ReadBytes('\n')
 		if err != nil {
 			if err == io.EOF {
-				c.buffer.Write(line)
+				if len(line) > 0 {
+					// bytes.Buffer.Write never returns an error.
+					_, _ = c.buffer.Write(line)
+				}
 				break
 			}
-			return len(p), nil
+			return len(p), err
 		}
 
-		payload := strings.TrimSpace(string(line))
-		if !strings.HasPrefix(payload, "data:") {
+		payload := bytes.TrimSpace(line)
+		if len(payload) == 0 {
+			c.currentEvent = nil
 			continue
 		}
-		payload = strings.TrimSpace(strings.TrimPrefix(payload, "data:"))
-		if payload == "" || payload == "[DONE]" {
+		if bytes.HasPrefix(payload, sseEventPrefix) {
+			c.currentEvent = bytes.TrimSpace(bytes.TrimPrefix(payload, sseEventPrefix))
 			continue
 		}
-		usage, ok := extractTokenUsageFromJSON([]byte(payload))
+		if !bytes.HasPrefix(payload, sseDataPrefix) {
+			continue
+		}
+		if !bytes.Equal(c.currentEvent, sseResponseCompletedEvent) {
+			continue
+		}
+		payload = bytes.TrimSpace(bytes.TrimPrefix(payload, sseDataPrefix))
+		if len(payload) == 0 || bytes.Equal(payload, sseDonePayload) {
+			continue
+		}
+		usage, ok := extractTokenUsageFromJSON(payload)
 		if !ok {
 			continue
 		}

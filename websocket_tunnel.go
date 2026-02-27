@@ -47,28 +47,20 @@ func tunnelWebSocket(w http.ResponseWriter, r *http.Request, upstream *websocket
 		resultCh <- copyResult{clientToUpstream: false, n: n, err: err}
 	}()
 
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-r.Context().Done():
-			_ = clientConn.Close()
-			_ = upstream.conn.Close()
-		case <-done:
-		}
-	}()
+	stopCancelClose := context.AfterFunc(r.Context(), func() {
+		_ = clientConn.Close()
+		_ = upstream.conn.Close()
+	})
+	defer stopCancelClose()
 
 	first := <-resultCh
 	_ = clientConn.Close()
 	_ = upstream.conn.Close()
 	second := <-resultCh
 
-	var clientToUpstream int64
-	var upstreamToClient int64
-	if first.clientToUpstream {
-		clientToUpstream = first.n
-		upstreamToClient = second.n
-	} else {
+	clientToUpstream := first.n
+	upstreamToClient := second.n
+	if !first.clientToUpstream {
 		clientToUpstream = second.n
 		upstreamToClient = first.n
 	}

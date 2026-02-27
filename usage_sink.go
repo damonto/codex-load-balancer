@@ -33,9 +33,7 @@ func (s *UsageSink) Run(ctx context.Context) {
 				s.drain()
 				return
 			case rec := <-s.ch:
-				if err := s.db.InsertUsage(context.Background(), rec); err != nil {
-					slog.Warn("record usage", "account", rec.AccountKey, "token", rec.TokenID, "err", err)
-				}
+				s.insertUsage(rec, "record usage")
 			}
 		}
 	})
@@ -63,11 +61,15 @@ func (s *UsageSink) drain() {
 	for {
 		select {
 		case rec := <-s.ch:
-			if err := s.db.InsertUsage(context.Background(), rec); err != nil {
-				slog.Warn("record usage during drain", "account", rec.AccountKey, "token", rec.TokenID, "err", err)
-			}
+			s.insertUsage(rec, "record usage during drain")
 		default:
 			return
 		}
+	}
+}
+
+func (s *UsageSink) insertUsage(rec UsageRecord, message string) {
+	if err := s.db.InsertUsage(context.Background(), rec); err != nil {
+		slog.Warn(message, "account", rec.AccountKey, "token", rec.TokenID, "err", err)
 	}
 }

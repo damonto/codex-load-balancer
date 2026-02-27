@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
 	input_tokens INTEGER NOT NULL,
 	cached_tokens INTEGER NOT NULL,
 	output_tokens INTEGER NOT NULL,
+	reasoning_tokens INTEGER NOT NULL DEFAULT 0,
 	created_at_unix INTEGER NOT NULL
 );
 `); err != nil {
@@ -119,8 +120,14 @@ ON usage_events(account_key, created_at_unix);
 `); err != nil {
 		return fmt.Errorf("create idx_usage_events_account_time: %w", err)
 	}
-	// Idempotent column addition — ignored if already present.
-	_, _ = s.db.ExecContext(ctx, `ALTER TABLE usage_events ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0`)
+	if err := s.ensureColumn(
+		ctx,
+		"usage_events",
+		"reasoning_tokens",
+		`ALTER TABLE usage_events ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0`,
+	); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS account_quotas (
 	account_key TEXT PRIMARY KEY,
@@ -132,6 +139,50 @@ CREATE TABLE IF NOT EXISTS account_quotas (
 		return fmt.Errorf("create account_quotas: %w", err)
 	}
 	return nil
+}
+
+func (s *UsageDB) ensureColumn(ctx context.Context, tableName string, columnName string, addColumnSQL string) error {
+	hasColumn, err := s.columnExists(ctx, tableName, columnName)
+	if err != nil {
+		return err
+	}
+	if hasColumn {
+		return nil
+	}
+
+	if _, err := s.db.ExecContext(ctx, addColumnSQL); err != nil {
+		return fmt.Errorf("add %s.%s column: %w", tableName, columnName, err)
+	}
+	return nil
+}
+
+func (s *UsageDB) columnExists(ctx context.Context, tableName string, columnName string) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%q)`, tableName))
+	if err != nil {
+		return false, fmt.Errorf("query %s columns: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			columnID     int
+			name         string
+			dataType     string
+			notNull      int
+			defaultValue sql.NullString
+			primaryKey   int
+		)
+		if err := rows.Scan(&columnID, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, fmt.Errorf("scan %s column: %w", tableName, err)
+		}
+		if name == columnName {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate %s columns: %w", tableName, err)
+	}
+	return false, nil
 }
 
 func (s *UsageDB) InsertUsage(ctx context.Context, rec UsageRecord) error {
@@ -298,8 +349,9 @@ func (s *UsageDB) ListAccountSummaries(
 	quota5hDefault int64,
 	quotaWeekDefault int64,
 ) ([]AccountUsageSummary, error) {
-	cutoff5h := time.Now().UTC().Add(-5 * time.Hour)
-	cutoffWeek := weekStartUTC(time.Now().UTC())
+	now := time.Now().UTC()
+	cutoff5h := now.Add(-5 * time.Hour)
+	cutoffWeek := weekStartUTC(now)
 
 	summariesByAccount, err := s.accountSummaries(ctx, cutoff5h, cutoffWeek)
 	if err != nil {

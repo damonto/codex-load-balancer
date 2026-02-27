@@ -64,6 +64,64 @@ func TestExtractTokenUsageFromJSON(t *testing.T) {
 	}
 }
 
+func TestExtractTokenUsageFromBodySSERequiresResponseCompletedEvent(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want TokenUsage
+		ok   bool
+	}{
+		{
+			name: "captures usage for response completed event",
+			body: "event: response.completed\n" +
+				"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":37,\"output_tokens\":11,\"output_tokens_details\":{\"reasoning_tokens\":0}}}}\n\n",
+			want: TokenUsage{InputTokens: 37, OutputTokens: 11, ReasoningTokens: 0},
+			ok:   true,
+		},
+		{
+			name: "ignores usage for non completed event",
+			body: "event: response.output_text.delta\n" +
+				"data: {\"type\":\"response.output_text.delta\",\"response\":{\"usage\":{\"input_tokens\":37,\"output_tokens\":11}}}\n\n",
+			ok: false,
+		},
+		{
+			name: "ignores data without event field",
+			body: "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":37,\"output_tokens\":11}}}\n\n",
+			ok:   false,
+		},
+		{
+			name: "event reset by empty line",
+			body: "event: response.completed\n\n" +
+				"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":37,\"output_tokens\":11}}}\n\n",
+			ok: false,
+		},
+		{
+			name: "captures last completed event usage",
+			body: "event: response.output_text.delta\n" +
+				"data: {\"type\":\"response.output_text.delta\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n" +
+				"event: response.completed\n" +
+				"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":3}}}\n\n",
+			want: TokenUsage{InputTokens: 5, OutputTokens: 3},
+			ok:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := extractTokenUsageFromBody([]byte(tt.body))
+			if ok != tt.ok {
+				t.Fatalf("extractTokenUsageFromBody() ok = %v, want %v", ok, tt.ok)
+			}
+			if !tt.ok {
+				return
+			}
+			if got != tt.want {
+				t.Fatalf("extractTokenUsageFromBody() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWeekStartUTC(t *testing.T) {
 	tests := []struct {
 		name string
