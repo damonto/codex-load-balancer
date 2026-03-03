@@ -223,9 +223,9 @@
           quotaPanel('weekly window', hasW, usedW, maxW, resetW) +
           '</section>' +
           '</section>' +
-          '<section class="grid grid-cols-2 md:grid-cols-3 gap-1.5">' +
-          '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Input</div><div class="flex items-baseline gap-1 mt-0.5"><span class="text-xl font-extrabold tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.input_tokens) + '</span><span class="text-[11px] text-gray-500 dark:text-slate-400">(Cached: ' + fmt(a.cached_tokens) + ')</span></div></div>' +
-          '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Output</div><div class="flex items-baseline gap-1 mt-0.5"><span class="text-xl font-extrabold tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.output_tokens) + '</span><span class="text-[11px] text-gray-500 dark:text-slate-400">(Reasoning: ' + fmt(a.reasoning_tokens) + ')</span></div></div>' +
+          '<section class="grid grid-cols-3 gap-1.5">' +
+          '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Input</div><div class="mt-0.5"><div class="text-xl font-extrabold tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.input_tokens) + '</div><div class="text-[11px] text-gray-500 dark:text-slate-400">Cached ' + fmt(a.cached_tokens) + '</div></div></div>' +
+          '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Output</div><div class="mt-0.5"><div class="text-xl font-extrabold tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.output_tokens) + '</div><div class="text-[11px] text-gray-500 dark:text-slate-400">Reasoning ' + fmt(a.reasoning_tokens) + '</div></div></div>' +
           '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Total</div><div class="text-xl font-extrabold mt-0.5 tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.total_tokens) + '</div></div>' +
           '</section>' +
           '</article>';
