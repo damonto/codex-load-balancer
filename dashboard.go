@@ -122,6 +122,11 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 
 	accounts := make([]dashboardAccount, 0, len(summaries))
 	for _, summary := range summaries {
+		// Skip stale usage-only accounts whose token files are gone.
+		if len(summary.ActiveTokenIDs) == 0 {
+			continue
+		}
+
 		info := accountInfos[summary.AccountKey]
 		account := dashboardAccount{
 			AccountKey:      summary.AccountKey,
