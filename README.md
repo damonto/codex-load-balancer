@@ -35,7 +35,8 @@ Flags:
 - `--api-key` (required): API key for protected interfaces.
 - `--data-dir` (required): Directory containing `*.json` auth files.
 - `--port` (optional): Listen port (default 8080).
-- `--usage-db` (optional): SQLite file path for usage history (default: `<data-dir>/usage.db`).
+- `--min-valid-accounts` (optional): Background top-up target at startup (0 disables startup top-up).
+- `--register-workers` (optional): Concurrent registration workers for startup/runtime top-up (default 5).
 
 ## Token File Format
 
@@ -83,9 +84,9 @@ If the upstream responds with status `429` or contains `"You've hit your usage l
 
 ## Usage Sync
 
-- Syncs at startup and every minute.
+- Syncs at startup and every 5 minutes.
 - Uses `https://chatgpt.com/backend-api/wham/usage`.
-- On `401` during sync, Codex load balancer attempts a refresh; if that fails permanently, the token is marked invalid.
+- On `401` during sync, Codex load balancer removes the token file, evicts the token from memory, and tops up the same count with new registrations.
 
 ## Dashboard
 

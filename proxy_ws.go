@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path string, sessionID string, prevTokenID string) {
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path string, sessionID string) {
 	tried := make(map[string]bool)
 	for attempt := range 2 {
 		token, sticky, err := s.store.SelectToken(sessionID, tried)
@@ -14,11 +14,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 			http.Error(w, "no available tokens", http.StatusServiceUnavailable)
 			return
 		}
-		reason := "ranked"
-		if sticky {
-			reason = "sticky"
-		}
-		slog.Info("websocket token select", "token", token.ID, "reason", reason, "session", sessionID, "attempt", attempt+1)
 
 		refreshed, err := maybeRefreshTokenIfStale(r.Context(), s.store, token.ID)
 		if err != nil {
@@ -83,7 +78,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 		if isLimitError(upstream.resp.StatusCode, upstream.body) {
 			tried[token.ID] = true
 			s.store.MarkCooldown(token.ID, time.Now().Add(cooldownDuration))
-			slog.Info("websocket token cooldown after usage limit", "token", token.ID)
 			if sessionID != "" {
 				s.store.ClearSession(sessionID)
 			}
@@ -101,21 +95,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 
 		if sessionID != "" && !sticky {
 			s.store.SetSession(sessionID, token.ID)
-			if prevTokenID != "" && prevTokenID != token.ID {
-				slog.Info("websocket session switched", "session", sessionID, "from", prevTokenID, "to", token.ID)
-			} else if prevTokenID == "" {
-				slog.Info("websocket session bound", "session", sessionID, "token", token.ID)
-			}
 		}
 
-		slog.Info(
-			"websocket tunnel start",
-			"token", token.ID,
-			"session", sessionID,
-			"status", upstream.resp.StatusCode,
-			"content_type", upstream.resp.Header.Get("Content-Type"),
-			"attempt", attempt+1,
-		)
 		clientToUpstream, upstreamToClient, tunnelErr := tunnelWebSocket(w, r, upstream)
 		ctxErr := r.Context().Err()
 		if tunnelErr != nil {
@@ -130,14 +111,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 			)
 			return
 		}
-		slog.Info(
-			"websocket tunnel end",
-			"token", token.ID,
-			"session", sessionID,
-			"client_to_upstream", clientToUpstream,
-			"upstream_to_client", upstreamToClient,
-			"ctx_err", ctxErr,
-		)
 		return
 	}
 }

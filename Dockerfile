@@ -16,7 +16,8 @@ WORKDIR /app
 COPY --from=builder /app/codex-load-balancer /app/codex-load-balancer
 
 RUN set -eux \
-	&& apk add --no-cache libcurl
+	&& apk add --no-cache libcurl \
+	&& mkdir -p /app/data
 
 COPY entrypoint.sh /entrypoint.sh
 

@@ -207,6 +207,25 @@ func (s *TokenStore) UpdateCredentials(id string, accessToken string, refreshTok
 	s.mu.Unlock()
 }
 
+func (s *TokenStore) RemoveToken(id string) (TokenState, bool) {
+	s.mu.Lock()
+	token, ok := s.tokens[id]
+	if !ok {
+		s.mu.Unlock()
+		return TokenState{}, false
+	}
+	removed := *token
+	delete(s.tokens, id)
+	if removed.Path != "" {
+		delete(s.fileMod, removed.Path)
+	}
+	delete(s.refreshes, id)
+	s.mu.Unlock()
+
+	s.ClearSessionsForToken(id)
+	return removed, true
+}
+
 func (s *TokenStore) TokenSnapshot(id string) (TokenState, bool) {
 	s.mu.RLock()
 	token, ok := s.tokens[id]

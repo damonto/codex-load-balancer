@@ -9,33 +9,16 @@ import (
 )
 
 func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
-	slog.Info(
-		"proxy request",
-		"method", r.Method,
-		"path", r.URL.Path,
-		"host", r.Host,
-		"remote", r.RemoteAddr,
-		"content_length", r.ContentLength,
-	)
 	if !allowedPath(r.URL.Path) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
 	sessionID := extractSessionID(r.Header)
-	prevTokenID := ""
-	if sessionID != "" {
-		if tokenID, ok := s.store.SessionToken(sessionID); ok {
-			prevTokenID = tokenID
-		}
-	}
 
 	forwardPath := normalizeResponsesPath(r.URL.Path)
 	if isWebSocketRequest(r) {
-		if sessionID == "" {
-			slog.Warn("websocket request missing session_id; reconnect may lose token stickiness")
-		}
-		s.handleWebSocket(w, r, forwardPath, sessionID, prevTokenID)
+		s.handleWebSocket(w, r, forwardPath, sessionID)
 		return
 	}
 
@@ -59,11 +42,6 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "no available tokens", http.StatusServiceUnavailable)
 			return
 		}
-		reason := "ranked"
-		if sticky {
-			reason = "sticky"
-		}
-		slog.Info("token select", "token", token.ID, "reason", reason, "session", sessionID, "attempt", attempt+1)
 
 		refreshed, err := maybeRefreshTokenIfStale(r.Context(), s.store, token.ID)
 		if err != nil {
@@ -81,16 +59,6 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "upstream error", http.StatusBadGateway)
 			return
 		}
-		slog.Info(
-			"upstream response",
-			"token", token.ID,
-			"session", sessionID,
-			"status", resp.StatusCode,
-			"content_type", resp.Header.Get("Content-Type"),
-			"transfer_encoding", resp.TransferEncoding,
-			"stream", stream,
-			"attempt", attempt+1,
-		)
 		if resp.StatusCode == http.StatusUnauthorized {
 			refreshed, err := maybeRefreshToken(r.Context(), s.store, token.ID)
 			if err != nil {
@@ -112,16 +80,6 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, "upstream error", http.StatusBadGateway)
 					return
 				}
-				slog.Info(
-					"upstream response",
-					"token", token.ID,
-					"session", sessionID,
-					"status", resp.StatusCode,
-					"content_type", resp.Header.Get("Content-Type"),
-					"transfer_encoding", resp.TransferEncoding,
-					"stream", stream,
-					"attempt", attempt+1,
-				)
 			}
 		}
 
@@ -146,7 +104,6 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if !stream && isLimitError(resp.StatusCode, respBody) {
 			tried[token.ID] = true
 			s.store.MarkCooldown(token.ID, time.Now().Add(cooldownDuration))
-			slog.Info("token cooldown after usage limit", "token", token.ID)
 			if sessionID != "" {
 				s.store.ClearSession(sessionID)
 			}
@@ -159,21 +116,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 		if sessionID != "" && !sticky {
 			s.store.SetSession(sessionID, token.ID)
-			if prevTokenID != "" && prevTokenID != token.ID {
-				slog.Info("session switched", "session", sessionID, "from", prevTokenID, "to", token.ID)
-			} else if prevTokenID == "" {
-				slog.Info("session bound", "session", sessionID, "token", token.ID)
-			}
 		}
 
 		if stream {
-			slog.Info(
-				"stream start",
-				"token", token.ID,
-				"session", sessionID,
-				"status", resp.StatusCode,
-				"content_type", resp.Header.Get("Content-Type"),
-			)
 			usageCapture := newSSEUsageCapture()
 			written, err := streamResponseWithObserver(w, resp, usageCapture)
 			if usage, ok := usageCapture.Usage(); ok {
@@ -182,8 +127,6 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			ctxErr := r.Context().Err()
 			if err != nil {
 				slog.Warn("stream end", "token", token.ID, "session", sessionID, "bytes", written, "err", err, "ctx_err", ctxErr)
-			} else {
-				slog.Info("stream end", "token", token.ID, "session", sessionID, "bytes", written, "ctx_err", ctxErr)
 			}
 			return
 		}

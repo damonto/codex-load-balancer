@@ -16,18 +16,20 @@ import (
 )
 
 var (
-	BuildVersion string
-	apiKey       string
-	dataDir      string
-	port         int
-	usageDBPath  string
+	BuildVersion     string
+	apiKey           string
+	dataDir          string
+	port             int
+	minValidAccounts int
+	registerWorkers  int
 )
 
 func main() {
 	flag.StringVar(&apiKey, "api-key", "", "API key for admin endpoints")
 	flag.StringVar(&dataDir, "data-dir", "", "directory with auth.json files")
 	flag.IntVar(&port, "port", defaultPort, "port to listen on")
-	flag.StringVar(&usageDBPath, "usage-db", "", "sqlite file path for token usage stats (default: <data-dir>/usage.db)")
+	flag.IntVar(&minValidAccounts, "min-valid-accounts", 0, "minimum valid accounts required at startup (0 disables auto top-up)")
+	flag.IntVar(&registerWorkers, "register-workers", defaultRegisterWorkers, "concurrent registration workers for startup/runtime top-up")
 	flag.Parse()
 
 	if apiKey == "" {
@@ -47,9 +49,7 @@ func main() {
 		slog.Error("--data-dir is not a directory")
 		os.Exit(1)
 	}
-	if usageDBPath == "" {
-		usageDBPath = filepath.Join(dataDir, "usage.db")
-	}
+	usageDBPath := filepath.Join(dataDir, "usage.db")
 
 	store := NewTokenStore()
 	if err := loadTokensFromDir(store, dataDir); err != nil {
@@ -75,7 +75,20 @@ func main() {
 	defer stop()
 
 	go runTokenWatcher(ctx, store, dataDir)
-	go runUsageSyncer(ctx, store)
+	go runUsageSyncer(ctx, store, dataDir, topUpOptions{
+		RegisterWorkers: registerWorkers,
+	})
+	if minValidAccounts > 0 {
+		go func() {
+			err := topUpAccounts(ctx, store, dataDir, topUpOptions{
+				TargetCount:     minValidAccounts,
+				RegisterWorkers: registerWorkers,
+			})
+			if err != nil && ctx.Err() == nil {
+				slog.Warn("startup account top-up", "err", err)
+			}
+		}()
+	}
 
 	upstreamURL, err := url.Parse(backendEndpoint("/codex"))
 	if err != nil {
