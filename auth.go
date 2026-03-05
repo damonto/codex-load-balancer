@@ -19,10 +19,6 @@ func proxyAuthorized(r *http.Request, apiKey string) bool {
 		return false
 	}
 
-	if key := strings.TrimSpace(r.Header.Get("X-API-Key")); key != "" {
-		return subtle.ConstantTimeCompare([]byte(key), []byte(apiKey)) == 1
-	}
-
 	value := strings.TrimSpace(r.Header.Get("Authorization"))
 	if value == "" {
 		return false

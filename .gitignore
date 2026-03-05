@@ -26,6 +26,9 @@ build/
 # Data directory
 data/
 
+# Config file
+config.toml
+
 # Refs
 refs/
 

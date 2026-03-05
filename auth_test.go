@@ -30,12 +30,12 @@ func TestProxyAuthorized(t *testing.T) {
 			wantAllowed: true,
 		},
 		{
-			name:   "valid x api key",
+			name:   "x api key is not accepted",
 			apiKey: "secret-123",
 			headers: map[string]string{
 				"X-API-Key": "secret-123",
 			},
-			wantAllowed: true,
+			wantAllowed: false,
 		},
 		{
 			name:   "wrong token",
