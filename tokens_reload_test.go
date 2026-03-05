@@ -175,6 +175,7 @@ func TestTokenStoreRemoveTokenAndRefreshLockConcurrent(t *testing.T) {
 			now := time.Now().UTC()
 			tokenID := "race.json"
 			tokenPath := filepath.Join(t.TempDir(), tokenID)
+			lockHits := 0
 
 			var wg sync.WaitGroup
 			wg.Go(func() {
@@ -187,10 +188,14 @@ func TestTokenStoreRemoveTokenAndRefreshLockConcurrent(t *testing.T) {
 				for range tt.iterations {
 					lock := store.RefreshLock(tokenID)
 					lock.Lock()
+					lockHits++
 					lock.Unlock()
 				}
 			})
 			wg.Wait()
+			if lockHits == 0 {
+				t.Fatal("lock should be acquired at least once")
+			}
 		})
 	}
 }
