@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -19,14 +20,6 @@ const usageSinkBufferSize = 2048
 
 var BuildVersion string
 
-type appConfig struct {
-	apiKey           string
-	dataDir          string
-	port             int
-	minValidAccounts int
-	registerWorkers  int
-}
-
 type appRuntime struct {
 	store     *TokenStore
 	usageDB   *UsageDB
@@ -34,22 +27,27 @@ type appRuntime struct {
 }
 
 func main() {
-	cfg := parseAppConfig()
+	configPath := parseConfigPath()
+	cfg, err := loadAppConfigFile(configPath)
+	if err != nil {
+		slog.Error("load config", "err", err)
+		os.Exit(1)
+	}
 	if err := run(cfg); err != nil {
 		slog.Error("run", "err", err)
 		os.Exit(1)
 	}
 }
 
-func parseAppConfig() appConfig {
-	cfg := appConfig{}
-	flag.StringVar(&cfg.apiKey, "api-key", "", "API key for admin endpoints")
-	flag.StringVar(&cfg.dataDir, "data-dir", "", "directory with auth.json files")
-	flag.IntVar(&cfg.port, "port", defaultPort, "port to listen on")
-	flag.IntVar(&cfg.minValidAccounts, "min-valid-accounts", 0, "minimum valid accounts required at startup (0 disables auto top-up)")
-	flag.IntVar(&cfg.registerWorkers, "register-workers", defaultRegisterWorkers, "concurrent registration workers for startup/runtime top-up")
+func parseConfigPath() string {
+	var path string
+	flag.StringVar(&path, "config", defaultConfigPath, "path to TOML config file")
 	flag.Parse()
-	return cfg
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return defaultConfigPath
+	}
+	return path
 }
 
 func run(cfg appConfig) error {
@@ -82,18 +80,18 @@ func run(cfg appConfig) error {
 
 func validateAppConfig(cfg appConfig) error {
 	if cfg.apiKey == "" {
-		return errors.New("missing --api-key")
+		return errors.New("api_key is required")
 	}
 	if cfg.dataDir == "" {
-		return errors.New("missing --data-dir")
+		return errors.New("data_dir is required")
 	}
 
 	info, err := os.Stat(cfg.dataDir)
 	if err != nil {
-		return fmt.Errorf("stat --data-dir: %w", err)
+		return fmt.Errorf("stat data_dir: %w", err)
 	}
 	if !info.IsDir() {
-		return errors.New("--data-dir is not a directory")
+		return errors.New("data_dir is not a directory")
 	}
 	return nil
 }
@@ -126,18 +124,23 @@ func closeRuntime(rt *appRuntime) {
 
 func startBackgroundWorkers(ctx context.Context, cfg appConfig, store *TokenStore) {
 	go runTokenWatcher(ctx, store, cfg.dataDir)
-	go runUsageSyncer(ctx, store, cfg.dataDir, topUpOptions{
+	topUpOpts := topUpOptions{
 		RegisterWorkers: cfg.registerWorkers,
-	})
+		RegisterTimeout: cfg.registerTimeout,
+		ProxyPool:       cfg.proxyPool,
+	}
+	go runUsageSyncer(ctx, store, cfg.dataDir, backendEndpoint(defaultBackendAPIBase, "/wham/usage"), usageSyncOptions{
+		Interval:    cfg.syncInterval,
+		Concurrency: cfg.syncConcurrency,
+	}, topUpOpts)
 	if cfg.minValidAccounts == 0 {
 		return
 	}
 
 	go func() {
-		err := topUpAccounts(ctx, store, cfg.dataDir, topUpOptions{
-			TargetCount:     cfg.minValidAccounts,
-			RegisterWorkers: cfg.registerWorkers,
-		})
+		opts := topUpOpts
+		opts.TargetCount = cfg.minValidAccounts
+		err := topUpAccounts(ctx, store, cfg.dataDir, opts)
 		if err != nil && ctx.Err() == nil {
 			slog.Warn("startup account top-up", "err", err)
 		}
@@ -145,7 +148,7 @@ func startBackgroundWorkers(ctx context.Context, cfg appConfig, store *TokenStor
 }
 
 func newHTTPServer(cfg appConfig, rt *appRuntime) (*http.Server, error) {
-	upstreamURL, err := url.Parse(backendEndpoint("/codex"))
+	upstreamURL, err := url.Parse(backendEndpoint(defaultBackendAPIBase, "/codex"))
 	if err != nil {
 		return nil, fmt.Errorf("parse upstream URL: %w", err)
 	}
@@ -191,15 +194,17 @@ func serve(ctx context.Context, srv *http.Server) error {
 		errCh <- srv.ListenAndServe()
 	}()
 
+	// Wait for a stop signal or the server to exit on its own.
 	select {
 	case <-ctx.Done():
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("server stopped: %w", err)
 		}
-		return nil
+		return nil // server exited cleanly before signal
 	}
 
+	// Signal received — graceful shutdown.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {

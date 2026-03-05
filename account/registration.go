@@ -38,12 +38,6 @@ var (
 	otpPattern           = regexp.MustCompile(`\b(\d{6})\b`)
 	oauthCallbackPattern = buildOAuthCallbackPattern(codexRedirectURI)
 	codexRedirectBaseURL = buildRedirectBaseURL(codexRedirectURI)
-
-	registrationProxyPool = []string{
-		"http://REDACTED_PROXY",
-		"http://REDACTED_PROXY",
-		"http://REDACTED_PROXY",
-	}
 )
 
 type RegisterOptions struct {
@@ -142,8 +136,4 @@ func RegisterCodexCredential(ctx context.Context, opts RegisterOptions) (Registe
 		return RegisterResult{}, fmt.Errorf("execute registration flow: %w", err)
 	}
 	return result, nil
-}
-
-func DefaultRegistrationProxies() []string {
-	return append([]string(nil), registrationProxyPool...)
 }

@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const defaultTokenWatchInterval = 10 * time.Second
+
 type authFile struct {
 	Tokens      *tokenFields `json:"tokens"`
 	LastRefresh *string      `json:"last_refresh"`
@@ -64,6 +66,7 @@ func loadTokensFromDir(store *TokenStore, dir string) error {
 		return fmt.Errorf("read token dir: %w", err)
 	}
 
+	existing := make(map[string]struct{}, len(entries))
 	added := 0
 	updated := 0
 	for _, entry := range entries {
@@ -74,6 +77,7 @@ func loadTokensFromDir(store *TokenStore, dir string) error {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
+		existing[filepath.Clean(path)] = struct{}{}
 		info, err := entry.Info()
 		if err != nil {
 			slog.Warn("token file stat", "path", path, "err", err)
@@ -109,6 +113,10 @@ func loadTokensFromDir(store *TokenStore, dir string) error {
 
 	if added > 0 || updated > 0 {
 		slog.Info("tokens loaded", "added", added, "updated", updated)
+	}
+	removed := store.PruneMissingTokens(dir, existing)
+	if len(removed) > 0 {
+		slog.Info("tokens pruned", "removed", len(removed))
 	}
 	return nil
 }
@@ -147,7 +155,7 @@ func parseLastRefresh(raw *string) time.Time {
 }
 
 func runTokenWatcher(ctx context.Context, store *TokenStore, dir string) {
-	ticker := time.NewTicker(watchInterval)
+	ticker := time.NewTicker(defaultTokenWatchInterval)
 	defer ticker.Stop()
 
 	for {

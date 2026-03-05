@@ -35,8 +35,8 @@ func TestValidAccountCount(t *testing.T) {
 	}, now)
 	store.MarkInvalid("b.json")
 
-	if got, want := validAccountCount(store), 1; got != want {
-		t.Fatalf("validAccountCount() = %d, want %d", got, want)
+	if got, want := store.ValidAccountCount(), 1; got != want {
+		t.Fatalf("ValidAccountCount() = %d, want %d", got, want)
 	}
 }
 

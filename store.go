@@ -3,10 +3,14 @@ package main
 import (
 	"cmp"
 	"errors"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
+
+const defaultLimitPoints = 100.0
 
 type WindowUsage struct {
 	UsedPercent       float64
@@ -219,11 +223,56 @@ func (s *TokenStore) RemoveToken(id string) (TokenState, bool) {
 	if removed.Path != "" {
 		delete(s.fileMod, removed.Path)
 	}
-	delete(s.refreshes, id)
 	s.mu.Unlock()
+
+	s.refreshMu.Lock()
+	delete(s.refreshes, id)
+	s.refreshMu.Unlock()
 
 	s.ClearSessionsForToken(id)
 	return removed, true
+}
+
+func (s *TokenStore) PruneMissingTokens(dir string, existingPaths map[string]struct{}) []TokenState {
+	cleanDir := filepath.Clean(dir)
+	removedIDs := make([]string, 0)
+	removed := make([]TokenState, 0)
+
+	s.mu.Lock()
+	for id, token := range s.tokens {
+		path := strings.TrimSpace(token.Path)
+		if path == "" {
+			continue
+		}
+		cleanPath := filepath.Clean(path)
+		if filepath.Dir(cleanPath) != cleanDir {
+			continue
+		}
+		if _, ok := existingPaths[cleanPath]; ok {
+			continue
+		}
+
+		removed = append(removed, *token)
+		removedIDs = append(removedIDs, id)
+		delete(s.tokens, id)
+		delete(s.fileMod, cleanPath)
+	}
+	s.mu.Unlock()
+
+	if len(removedIDs) == 0 {
+		return nil
+	}
+
+	s.refreshMu.Lock()
+	for _, id := range removedIDs {
+		delete(s.refreshes, id)
+	}
+	s.refreshMu.Unlock()
+
+	for _, id := range removedIDs {
+		s.ClearSessionsForToken(id)
+	}
+	return removed
 }
 
 func (s *TokenStore) TokenSnapshot(id string) (TokenState, bool) {
@@ -379,6 +428,19 @@ func selectBestCandidate(candidates []TokenCandidate) TokenState {
 type AccountInfo struct {
 	Email    string
 	PlanType string
+}
+
+func (s *TokenStore) ValidAccountCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	seen := make(map[string]struct{}, len(s.tokens))
+	for _, t := range s.tokens {
+		if t.Invalid {
+			continue
+		}
+		seen[accountKeyFromToken(*t)] = struct{}{}
+	}
+	return len(seen)
 }
 
 func (s *TokenStore) AccountInfos() map[string]AccountInfo {

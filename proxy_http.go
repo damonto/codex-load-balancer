@@ -13,17 +13,32 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	if !proxyAuthorized(r, s.apiKey) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="codex-load-balancer"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 
 	sessionID := extractSessionID(r.Header)
 
 	forwardPath := normalizeResponsesPath(r.URL.Path)
 	if isWebSocketRequest(r) {
+		if sessionID == "" {
+			slog.Warn("websocket request missing session_id; reconnect may lose token stickiness")
+		}
 		s.handleWebSocket(w, r, forwardPath, sessionID)
 		return
 	}
 
+	prevTokenID := ""
+	if sessionID != "" {
+		if tokenID, ok := s.store.SessionToken(sessionID); ok {
+			prevTokenID = tokenID
+		}
+	}
+
 	defer r.Body.Close()
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
+	r.Body = http.MaxBytesReader(w, r.Body, defaultMaxRequestBody)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		var maxErr *http.MaxBytesError
@@ -42,8 +57,13 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "no available tokens", http.StatusServiceUnavailable)
 			return
 		}
+		reason := "ranked"
+		if sticky {
+			reason = "sticky"
+		}
+		slog.Info("token select", "token", token.ID, "reason", reason, "session", sessionID, "attempt", attempt+1)
 
-		refreshed, err := maybeRefreshTokenIfStale(r.Context(), s.store, token.ID)
+		refreshed, err := maybeRefreshTokenIfStale(r.Context(), s.store, token.ID, defaultProxyRefreshConfig())
 		if err != nil {
 			slog.Warn("token refresh failed", "token", token.ID, "err", err)
 		}
@@ -60,14 +80,14 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if resp.StatusCode == http.StatusUnauthorized {
-			refreshed, err := maybeRefreshToken(r.Context(), s.store, token.ID)
+			refreshed, err := maybeRefreshToken(r.Context(), s.store, token.ID, defaultProxyRefreshConfig())
 			if err != nil {
 				if isPermanentRefreshError(err) {
 					slog.Warn("token refresh permanently failed", "token", token.ID, "err", err)
 					s.store.MarkInvalid(token.ID)
 				} else {
 					slog.Warn("token refresh failed", "token", token.ID, "err", err)
-					s.store.MarkCooldown(token.ID, time.Now().Add(cooldownDuration))
+					s.store.MarkCooldown(token.ID, time.Now().Add(defaultCooldownDuration))
 				}
 			}
 			if refreshed {
@@ -103,7 +123,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		if !stream && isLimitError(resp.StatusCode, respBody) {
 			tried[token.ID] = true
-			s.store.MarkCooldown(token.ID, time.Now().Add(cooldownDuration))
+			s.store.MarkCooldown(token.ID, time.Now().Add(defaultCooldownDuration))
+			slog.Info("token cooldown", "token", token.ID, "reason", "usage limit")
 			if sessionID != "" {
 				s.store.ClearSession(sessionID)
 			}
@@ -116,6 +137,11 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 		if sessionID != "" && !sticky {
 			s.store.SetSession(sessionID, token.ID)
+			if prevTokenID != "" && prevTokenID != token.ID {
+				slog.Info("session switched", "session", sessionID, "from", prevTokenID, "to", token.ID)
+			} else if prevTokenID == "" {
+				slog.Info("session bound", "session", sessionID, "token", token.ID)
+			}
 		}
 
 		if stream {

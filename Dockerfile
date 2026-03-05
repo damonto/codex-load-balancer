@@ -19,8 +19,4 @@ RUN set -eux \
 	&& apk add --no-cache libcurl \
 	&& mkdir -p /app/data
 
-COPY entrypoint.sh /entrypoint.sh
-
-RUN chmod 755 /entrypoint.sh
-
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/app/codex-load-balancer", "--config", "/app/config.toml"]

@@ -5,13 +5,17 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/damonto/codex-load-balancer/account"
 )
 
-const defaultRegisterWorkers = 5
-const topUpRetryInterval = 5 * time.Second
+const (
+	defaultRegisterWorkers    = 5
+	defaultTopUpRetryInterval = 5 * time.Second
+	defaultRegisterTimeout    = 6 * time.Minute
+)
 
 var (
 	registerCodexCredential = account.RegisterCodexCredential
@@ -22,6 +26,7 @@ type topUpOptions struct {
 	TargetCount     int
 	RegisterTimeout time.Duration
 	RegisterWorkers int
+	ProxyPool       []string
 }
 
 func topUpAccounts(ctx context.Context, store *TokenStore, dataDir string, opts topUpOptions) error {
@@ -29,7 +34,7 @@ func topUpAccounts(ctx context.Context, store *TokenStore, dataDir string, opts 
 		return nil
 	}
 
-	current := validAccountCount(store)
+	current := store.ValidAccountCount()
 	if current >= opts.TargetCount {
 		slog.Info("startup account top-up skipped", "valid_accounts", current, "target", opts.TargetCount)
 		return nil
@@ -48,7 +53,7 @@ func topUpAccounts(ctx context.Context, store *TokenStore, dataDir string, opts 
 		return fmt.Errorf("top up missing accounts: %w", err)
 	}
 
-	current = validAccountCount(store)
+	current = store.ValidAccountCount()
 	if current < opts.TargetCount {
 		return fmt.Errorf("valid accounts %d below target %d", current, opts.TargetCount)
 	}
@@ -62,12 +67,8 @@ func topUpMissingAccounts(ctx context.Context, store *TokenStore, dataDir string
 		return nil
 	}
 
-	registerTimeout := opts.RegisterTimeout
-	if registerTimeout <= 0 {
-		registerTimeout = 6 * time.Minute
-	}
+	retryInterval := defaultTopUpRetryInterval
 
-	registerWorkers := resolveRegisterWorkers(opts.RegisterWorkers)
 	remaining := missing
 	for trial := 1; remaining > 0; trial++ {
 		if err := ctx.Err(); err != nil {
@@ -75,7 +76,7 @@ func topUpMissingAccounts(ctx context.Context, store *TokenStore, dataDir string
 		}
 
 		requested := remaining
-		succeeded, err := registerBatch(ctx, store, dataDir, requested, registerTimeout, registerWorkers, trial)
+		succeeded, err := registerBatch(ctx, store, dataDir, requested, trial, opts)
 		if err != nil {
 			return err
 		}
@@ -86,14 +87,14 @@ func topUpMissingAccounts(ctx context.Context, store *TokenStore, dataDir string
 			"requested", requested,
 			"succeeded", succeeded,
 			"remaining", remaining,
-			"valid_accounts", validAccountCount(store),
+			"valid_accounts", store.ValidAccountCount(),
 		)
 
 		if remaining > 0 {
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("account top-up canceled: %w", ctx.Err())
-			case <-time.After(topUpRetryInterval):
+			case <-time.After(retryInterval):
 			}
 		}
 	}
@@ -105,20 +106,24 @@ func registerBatch(
 	store *TokenStore,
 	dataDir string,
 	attempts int,
-	registerTimeout time.Duration,
-	registerWorkers int,
 	trial int,
+	opts topUpOptions,
 ) (int, error) {
 	if attempts <= 0 {
 		return 0, nil
 	}
 
+	registerTimeout := opts.RegisterTimeout
+	if registerTimeout <= 0 {
+		registerTimeout = defaultRegisterTimeout
+	}
+	registerWorkers := resolveRegisterWorkers(opts.RegisterWorkers)
+
 	workerCount := min(registerWorkers, attempts)
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	var reloadMu sync.Mutex
-	var successMu sync.Mutex
-	succeeded := 0
+	var succeeded atomic.Int32
 
 	for workerID := range workerCount {
 		wg.Add(1)
@@ -131,7 +136,8 @@ func registerBatch(
 
 				registerCtx, cancel := context.WithTimeout(ctx, registerTimeout)
 				result, err := registerCodexCredential(registerCtx, account.RegisterOptions{
-					DataDir: dataDir,
+					DataDir:             dataDir,
+					RegistrationProxies: opts.ProxyPool,
 				})
 				cancel()
 				if err != nil {
@@ -158,9 +164,7 @@ func registerBatch(
 					continue
 				}
 
-				successMu.Lock()
-				succeeded++
-				successMu.Unlock()
+				succeeded.Add(1)
 
 				slog.Info("account registration succeeded",
 					"trial", trial,
@@ -169,7 +173,7 @@ func registerBatch(
 					"email", result.Email,
 					"account_id", result.AccountID,
 					"file", result.FilePath,
-					"valid_accounts", validAccountCount(store),
+					"valid_accounts", store.ValidAccountCount(),
 				)
 			}
 		}(workerID + 1)
@@ -186,7 +190,7 @@ func registerBatch(
 	}
 	close(jobs)
 	wg.Wait()
-	return succeeded, nil
+	return int(succeeded.Load()), nil
 }
 
 func resolveRegisterWorkers(workers int) int {
@@ -194,8 +198,4 @@ func resolveRegisterWorkers(workers int) int {
 		return defaultRegisterWorkers
 	}
 	return workers
-}
-
-func validAccountCount(store *TokenStore) int {
-	return len(store.AccountInfos())
 }

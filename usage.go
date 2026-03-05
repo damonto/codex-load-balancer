@@ -43,8 +43,8 @@ type UsageSnapshot struct {
 
 var errUnauthorized = errors.New("unauthorized")
 
-func fetchUsage(ctx context.Context, client *http.Client, ref TokenRef) (UsageSnapshot, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, usageURL(), nil)
+func fetchUsage(ctx context.Context, client *http.Client, usageURL string, ref TokenRef) (UsageSnapshot, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, usageURL, nil)
 	if err != nil {
 		return UsageSnapshot{}, fmt.Errorf("build usage request: %w", err)
 	}
@@ -77,10 +77,6 @@ func fetchUsage(ctx context.Context, client *http.Client, ref TokenRef) (UsageSn
 	}
 
 	return mapUsageSnapshot(payload), nil
-}
-
-func usageURL() string {
-	return backendEndpoint("/wham/usage")
 }
 
 func mapUsageSnapshot(payload rateLimitStatusPayload) UsageSnapshot {

@@ -7,13 +7,35 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-func runUsageSyncer(ctx context.Context, store *TokenStore, dataDir string, topUpOpts topUpOptions) {
+const (
+	defaultUsageSyncInterval    = 5 * time.Minute
+	defaultUsageSyncConcurrency = 8
+)
+
+type usageSyncOptions struct {
+	Interval    time.Duration
+	Concurrency int
+}
+
+func normalizeUsageSyncOptions(opts usageSyncOptions) usageSyncOptions {
+	if opts.Interval <= 0 {
+		opts.Interval = defaultUsageSyncInterval
+	}
+	if opts.Concurrency <= 0 {
+		opts.Concurrency = defaultUsageSyncConcurrency
+	}
+	return opts
+}
+
+func runUsageSyncer(ctx context.Context, store *TokenStore, dataDir string, usageURL string, syncOpts usageSyncOptions, topUpOpts topUpOptions) {
+	syncOpts = normalizeUsageSyncOptions(syncOpts)
 	client := &http.Client{Timeout: 15 * time.Second}
-	syncUsageOnce(ctx, store, client, dataDir, topUpOpts)
-	ticker := time.NewTicker(syncInterval)
+	syncUsageOnce(ctx, store, client, dataDir, usageURL, syncOpts, topUpOpts)
+	ticker := time.NewTicker(syncOpts.Interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -21,17 +43,17 @@ func runUsageSyncer(ctx context.Context, store *TokenStore, dataDir string, topU
 			return
 		case <-ticker.C:
 		}
-		syncUsageOnce(ctx, store, client, dataDir, topUpOpts)
+		syncUsageOnce(ctx, store, client, dataDir, usageURL, syncOpts, topUpOpts)
 	}
 }
 
-func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, dataDir string, topUpOpts topUpOptions) {
+func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, dataDir string, usageURL string, syncOpts usageSyncOptions, topUpOpts topUpOptions) {
 	refs := store.TokenRefs()
 	if len(refs) == 0 {
 		return
 	}
-	sem := make(chan struct{}, syncConcurrency)
-	removed := make(chan struct{}, len(refs))
+	sem := make(chan struct{}, syncOpts.Concurrency)
+	var removedCount atomic.Int32
 	var wg sync.WaitGroup
 	for _, ref := range refs {
 		if ctx.Err() != nil {
@@ -42,30 +64,26 @@ func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, 
 		go func(ref TokenRef) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if syncOneToken(ctx, store, client, ref) {
-				removed <- struct{}{}
+			if syncOneToken(ctx, store, client, usageURL, ref) {
+				removedCount.Add(1)
 			}
 		}(ref)
 	}
 	wg.Wait()
-	close(removed)
 
-	removedCount := 0
-	for range removed {
-		removedCount++
-	}
-	if removedCount == 0 {
+	n := int(removedCount.Load())
+	if n == 0 {
 		return
 	}
 
-	slog.Warn("usage sync removed unauthorized tokens", "removed", removedCount)
-	if err := topUpMissingAccounts(ctx, store, dataDir, removedCount, topUpOpts); err != nil && ctx.Err() == nil {
-		slog.Warn("usage sync account top-up", "removed", removedCount, "err", err)
+	slog.Warn("usage sync removed unauthorized tokens", "removed", n)
+	if err := topUpMissingAccounts(ctx, store, dataDir, n, topUpOpts); err != nil && ctx.Err() == nil {
+		slog.Warn("usage sync account top-up", "removed", n, "err", err)
 	}
 }
 
-func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, ref TokenRef) bool {
-	refreshed, refreshErr := maybeRefreshTokenIfStale(ctx, store, ref.ID)
+func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, usageURL string, ref TokenRef) bool {
+	refreshed, refreshErr := maybeRefreshTokenIfStale(ctx, store, ref.ID, defaultProxyRefreshConfig())
 	if refreshErr != nil {
 		slog.Warn("token refresh failed during usage sync", "token", ref.ID, "err", refreshErr)
 	}
@@ -76,7 +94,7 @@ func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, r
 		}
 	}
 
-	snapshot, err := fetchUsage(ctx, client, ref)
+	snapshot, err := fetchUsage(ctx, client, usageURL, ref)
 	if err != nil {
 		if errors.Is(err, errUnauthorized) {
 			return removeTokenAfterUsageUnauthorized(store, ref.ID)

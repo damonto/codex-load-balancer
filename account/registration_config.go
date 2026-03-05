@@ -30,11 +30,7 @@ func normalizeOptions(opts RegisterOptions) (registrationConfig, error) {
 
 	proxy := strings.TrimSpace(opts.Proxy)
 	if proxy == "" {
-		pool := opts.RegistrationProxies
-		if len(pool) == 0 {
-			pool = registrationProxyPool
-		}
-		proxy = pickRandomProxy(pool)
+		proxy = pickRandomProxy(opts.RegistrationProxies)
 	}
 	if proxy == "" {
 		return registrationConfig{}, errors.New("proxy pool is empty")

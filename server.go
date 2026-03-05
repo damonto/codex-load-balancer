@@ -3,6 +3,12 @@ package main
 import (
 	"net/http"
 	"net/url"
+	"time"
+)
+
+const (
+	defaultCooldownDuration = time.Minute
+	defaultMaxRequestBody   = 10 * 1024 * 1024 // 10 MB
 )
 
 type Server struct {

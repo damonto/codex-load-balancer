@@ -3,6 +3,7 @@ module github.com/damonto/codex-load-balancer
 go 1.25.0
 
 require (
+	github.com/BurntSushi/toml v1.5.0
 	github.com/bogdanfinn/fhttp v0.6.8
 	github.com/bogdanfinn/tls-client v1.14.0
 	modernc.org/sqlite v1.46.1

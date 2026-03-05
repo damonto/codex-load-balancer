@@ -13,6 +13,16 @@ import (
 	"strings"
 )
 
+const defaultBackendAPIBase = "https://chatgpt.com/backend-api"
+
+func backendEndpoint(baseURL string, path string) string {
+	base := strings.TrimRight(baseURL, "/")
+	if strings.HasPrefix(path, "/") {
+		return base + path
+	}
+	return base + "/" + path
+}
+
 func (s *Server) forwardRequest(r *http.Request, body []byte, token TokenState, path string) (*http.Response, []byte, bool, error) {
 	target := *s.upstreamURL
 	target.Path = joinURLPath(s.upstreamURL.Path, path)
@@ -122,16 +132,6 @@ func isEventStream(resp *http.Response) bool {
 	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
 	if strings.HasPrefix(contentType, "text/event-stream") {
 		return true
-	}
-	// Some Codex endpoints omit Content-Type but still deliver SSE over
-	// chunked transfer encoding. Treat these as streams so we don't buffer
-	// the entire response before forwarding and can capture usage inline.
-	if contentType == "" {
-		for _, enc := range resp.TransferEncoding {
-			if strings.EqualFold(enc, "chunked") {
-				return true
-			}
-		}
 	}
 	return false
 }

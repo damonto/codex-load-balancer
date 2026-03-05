@@ -7,6 +7,13 @@ import (
 )
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path string, sessionID string) {
+	prevTokenID := ""
+	if sessionID != "" {
+		if tokenID, ok := s.store.SessionToken(sessionID); ok {
+			prevTokenID = tokenID
+		}
+	}
+
 	tried := make(map[string]bool)
 	for attempt := range 2 {
 		token, sticky, err := s.store.SelectToken(sessionID, tried)
@@ -14,8 +21,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 			http.Error(w, "no available tokens", http.StatusServiceUnavailable)
 			return
 		}
+		reason := "ranked"
+		if sticky {
+			reason = "sticky"
+		}
+		slog.Info("websocket token select", "token", token.ID, "reason", reason, "session", sessionID, "attempt", attempt+1)
 
-		refreshed, err := maybeRefreshTokenIfStale(r.Context(), s.store, token.ID)
+		refreshed, err := maybeRefreshTokenIfStale(r.Context(), s.store, token.ID, defaultProxyRefreshConfig())
 		if err != nil {
 			slog.Warn("websocket token refresh failed", "token", token.ID, "err", err)
 		}
@@ -33,14 +45,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 		}
 
 		if upstream.resp.StatusCode == http.StatusUnauthorized {
-			refreshed, err := maybeRefreshToken(r.Context(), s.store, token.ID)
+			refreshed, err := maybeRefreshToken(r.Context(), s.store, token.ID, defaultProxyRefreshConfig())
 			if err != nil {
 				if isPermanentRefreshError(err) {
 					slog.Warn("websocket token refresh permanently failed", "token", token.ID, "err", err)
 					s.store.MarkInvalid(token.ID)
 				} else {
 					slog.Warn("websocket token refresh failed", "token", token.ID, "err", err)
-					s.store.MarkCooldown(token.ID, time.Now().Add(cooldownDuration))
+					s.store.MarkCooldown(token.ID, time.Now().Add(defaultCooldownDuration))
 				}
 			}
 			if refreshed {
@@ -77,7 +89,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 
 		if isLimitError(upstream.resp.StatusCode, upstream.body) {
 			tried[token.ID] = true
-			s.store.MarkCooldown(token.ID, time.Now().Add(cooldownDuration))
+			s.store.MarkCooldown(token.ID, time.Now().Add(defaultCooldownDuration))
+			slog.Info("token cooldown", "token", token.ID, "reason", "usage limit")
 			if sessionID != "" {
 				s.store.ClearSession(sessionID)
 			}
@@ -95,6 +108,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 
 		if sessionID != "" && !sticky {
 			s.store.SetSession(sessionID, token.ID)
+			if prevTokenID != "" && prevTokenID != token.ID {
+				slog.Info("websocket session switched", "session", sessionID, "from", prevTokenID, "to", token.ID)
+			} else if prevTokenID == "" {
+				slog.Info("websocket session bound", "session", sessionID, "token", token.ID)
+			}
 		}
 
 		clientToUpstream, upstreamToClient, tunnelErr := tunnelWebSocket(w, r, upstream)

@@ -13,6 +13,36 @@ import (
 	"time"
 )
 
+const (
+	refreshTokenURL      = "https://auth.openai.com/oauth/token"
+	refreshClientID      = "app_EMoamEEZ73f0CkXaXp7hrann"
+	refreshScope         = "openid profile email"
+	defaultRefreshWindow = 8 * 24 * time.Hour
+	defaultRefreshGap    = 30 * time.Second // prevent thundering herd on concurrent 401s
+)
+
+type refreshConfig struct {
+	Interval time.Duration
+	Debounce time.Duration
+}
+
+func defaultProxyRefreshConfig() refreshConfig {
+	return refreshConfig{
+		Interval: defaultRefreshWindow,
+		Debounce: defaultRefreshGap,
+	}
+}
+
+func normalizeRefreshConfig(cfg refreshConfig) refreshConfig {
+	if cfg.Interval <= 0 {
+		cfg.Interval = defaultRefreshWindow
+	}
+	if cfg.Debounce <= 0 {
+		cfg.Debounce = defaultRefreshGap
+	}
+	return cfg
+}
+
 type refreshTokenError struct {
 	permanent bool
 	err       error
@@ -46,15 +76,17 @@ type refreshResponse struct {
 // refreshHTTPClient is shared across all refresh calls to reuse TCP/TLS connections.
 var refreshHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
-func maybeRefreshToken(ctx context.Context, store *TokenStore, tokenID string) (bool, error) {
-	return maybeRefreshTokenWithMode(ctx, store, tokenID, false)
+func maybeRefreshToken(ctx context.Context, store *TokenStore, tokenID string, cfg refreshConfig) (bool, error) {
+	return maybeRefreshTokenWithMode(ctx, store, tokenID, false, cfg)
 }
 
-func maybeRefreshTokenIfStale(ctx context.Context, store *TokenStore, tokenID string) (bool, error) {
-	return maybeRefreshTokenWithMode(ctx, store, tokenID, true)
+func maybeRefreshTokenIfStale(ctx context.Context, store *TokenStore, tokenID string, cfg refreshConfig) (bool, error) {
+	return maybeRefreshTokenWithMode(ctx, store, tokenID, true, cfg)
 }
 
-func maybeRefreshTokenWithMode(ctx context.Context, store *TokenStore, tokenID string, refreshIfStale bool) (bool, error) {
+func maybeRefreshTokenWithMode(ctx context.Context, store *TokenStore, tokenID string, refreshIfStale bool, cfg refreshConfig) (bool, error) {
+	cfg = normalizeRefreshConfig(cfg)
+
 	token, ok := store.TokenSnapshot(tokenID)
 	if !ok {
 		return false, errors.New("token not found")
@@ -62,7 +94,7 @@ func maybeRefreshTokenWithMode(ctx context.Context, store *TokenStore, tokenID s
 	if token.RefreshToken == "" {
 		return false, nil
 	}
-	if refreshIfStale && !tokenNeedsRefresh(token.LastRefresh, time.Now()) {
+	if refreshIfStale && !tokenNeedsRefresh(token.LastRefresh, time.Now(), cfg.Interval) {
 		return false, nil
 	}
 
@@ -77,13 +109,13 @@ func maybeRefreshTokenWithMode(ctx context.Context, store *TokenStore, tokenID s
 	if token.RefreshToken == "" {
 		return false, nil
 	}
-	if refreshIfStale && !tokenNeedsRefresh(token.LastRefresh, time.Now()) {
+	if refreshIfStale && !tokenNeedsRefresh(token.LastRefresh, time.Now(), cfg.Interval) {
 		return false, nil
 	}
 	// For forced refreshes (on 401): if another goroutine already refreshed
 	// within the debounce window, treat it as done to avoid hammering the auth
 	// endpoint with a thundering herd of concurrent 401 retries.
-	if !refreshIfStale && !token.LastRefresh.IsZero() && time.Since(token.LastRefresh) < refreshDebounce {
+	if !refreshIfStale && !token.LastRefresh.IsZero() && time.Since(token.LastRefresh) < cfg.Debounce {
 		return true, nil
 	}
 
@@ -103,11 +135,11 @@ func maybeRefreshTokenWithMode(ctx context.Context, store *TokenStore, tokenID s
 	return true, nil
 }
 
-func tokenNeedsRefresh(lastRefresh time.Time, now time.Time) bool {
+func tokenNeedsRefresh(lastRefresh time.Time, now time.Time, interval time.Duration) bool {
 	if lastRefresh.IsZero() {
 		return false
 	}
-	return lastRefresh.Before(now.Add(-refreshInterval))
+	return lastRefresh.Before(now.Add(-interval))
 }
 
 func refreshAccessToken(ctx context.Context, refreshToken string) (string, string, error) {
