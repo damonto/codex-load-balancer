@@ -40,20 +40,42 @@ Startup flag:
 
 - `api_key` (required): API key for protected interfaces.
 - `data_dir` (required): Directory containing `*.json` auth files.
-- `upstream.backend_api_base_url` (optional): Upstream API base (default `https://chatgpt.com/backend-api`).
 - `server.port` (optional): Listen port (default 8080).
-- `server.cooldown_seconds` (optional): Token cooldown window for limit/refresh failures (default 60).
-- `server.max_request_body_bytes` (optional): Max request body size (default 10485760).
 - `top_up.min_valid_accounts` (optional): Background top-up target at startup (0 disables startup top-up).
 - `top_up.register_workers` (optional): Concurrent registration workers for startup/runtime top-up (default 5).
 - `top_up.register_timeout_seconds` (optional): Per-registration timeout (default 360).
-- `top_up.retry_interval_seconds` (optional): Retry delay between top-up trials (default 5).
-- `sync.watch_interval_seconds` (optional): Token dir polling interval (default 10).
 - `sync.usage_sync_interval_seconds` (optional): Usage sync interval (default 300).
 - `sync.usage_sync_concurrency` (optional): Usage sync concurrency (default 8).
-- `refresh.interval_seconds` (optional): Refresh staleness window (default 691200).
-- `refresh.debounce_seconds` (optional): 401 forced-refresh debounce window (default 30).
 - `account.registration_proxy_pool` (required): Registration proxy pool for account top-up.
+
+Current example:
+
+```toml
+api_key = "your-api-key"
+data_dir = "/app/data"
+
+[server]
+port = 8080
+
+[top_up]
+min_valid_accounts = 0
+register_workers = 5
+register_timeout_seconds = 360
+
+[sync]
+usage_sync_interval_seconds = 300
+usage_sync_concurrency = 8
+
+[account]
+registration_proxy_pool = [
+  "http://user:pass@proxy.example.com:7777",
+]
+```
+
+Notes:
+
+- Unknown config keys cause startup failure.
+- `account.registration_proxy_pool` must contain at least one non-empty proxy URL.
 
 ## Token File Format
 
