@@ -27,6 +27,8 @@ type appRuntime struct {
 }
 
 func main() {
+	slog.Info("starting codex load balancer", "build_version", BuildVersion)
+
 	configPath := parseConfigPath()
 	cfg, err := loadAppConfigFile(configPath)
 	if err != nil {
