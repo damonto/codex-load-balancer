@@ -68,7 +68,7 @@ func (r *registrationFlow) completeRegistrationFlow(ctx context.Context) error {
 	}
 	slog.Info("signup password submitted", "email", r.email)
 
-	if err := r.sendVerificationEmail(ctx); err != nil {
+	if err := r.sendVerificationEmailRegistered(ctx); err != nil {
 		return fmt.Errorf("send registration otp email: %w", err)
 	}
 	slog.Info("otp email requested", "email", r.email)

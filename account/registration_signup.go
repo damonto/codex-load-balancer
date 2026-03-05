@@ -125,24 +125,6 @@ func extractCSRFToken(raw string) string {
 	return strings.TrimSpace(parts[0])
 }
 
-func (r *registrationFlow) sendVerificationEmail(ctx context.Context) error {
-	if r.passwordSet {
-		err := r.sendVerificationEmailRegistered(ctx)
-		if err == nil {
-			return nil
-		}
-		slog.Warn("registered otp endpoint failed, trying passwordless otp endpoint", "email", r.email, "err", err)
-		return r.sendVerificationEmailPasswordless(ctx)
-	}
-
-	err := r.sendVerificationEmailPasswordless(ctx)
-	if err == nil {
-		return nil
-	}
-	slog.Warn("passwordless otp endpoint failed, trying registered otp endpoint", "email", r.email, "err", err)
-	return r.sendVerificationEmailRegistered(ctx)
-}
-
 func (r *registrationFlow) registerPassword(ctx context.Context) error {
 	body := map[string]string{
 		"username": r.email,
@@ -165,7 +147,6 @@ func (r *registrationFlow) registerPassword(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
-		r.passwordSet = true
 		return nil
 	}
 	raw, _ := io.ReadAll(resp.Body)
@@ -186,24 +167,6 @@ func (r *registrationFlow) sendVerificationEmailRegistered(ctx context.Context) 
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("registered otp send status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-	return nil
-}
-
-func (r *registrationFlow) sendVerificationEmailPasswordless(ctx context.Context) error {
-	headers := map[string]string{
-		"Referer":      authBaseURL + "/create-account/password",
-		"Accept":       "application/json",
-		"Content-Type": "application/json",
-	}
-	resp, err := doRequest(ctx, r.client, http.MethodPost, authBaseURL+"/api/accounts/passwordless/send-otp", headers, nil, "")
-	if err != nil {
-		return fmt.Errorf("request passwordless otp send: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("passwordless otp send status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	return nil
 }

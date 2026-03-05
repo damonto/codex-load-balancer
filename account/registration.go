@@ -83,7 +83,6 @@ type registrationFlow struct {
 	codeVerifier     string
 	state            string
 	codeChallenge    string
-	passwordSet      bool
 }
 
 type workspace struct {
