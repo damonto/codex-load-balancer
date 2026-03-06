@@ -30,7 +30,7 @@ data/
 config.toml
 
 # Refs
-refs/
+# refs/
 
 # macOS
 .DS_Store

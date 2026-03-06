@@ -99,6 +99,7 @@ Example:
 - Allowed paths: `/responses` and `/v1/responses` only.
 - `/v1/responses` is normalized to `/responses` upstream.
 - All request headers are preserved; only `Authorization` is replaced.
+- For WebSocket upstream requests, `Sec-WebSocket-Extensions` is stripped so usage frames stay observable as plain JSON (no per-message compression).
 - Upstream base URL: `https://chatgpt.com/backend-api/codex`.
 - WebSocket (`Upgrade: websocket`) requests are proxied through the selected token.
 

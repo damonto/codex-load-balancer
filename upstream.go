@@ -88,6 +88,7 @@ func (s *Server) forwardWebSocketRequestWithTarget(r *http.Request, target url.U
 	req.RequestURI = ""
 	req.Host = target.Host
 	req.Header = cloneHeaders(r.Header)
+	req.Header.Del("Sec-WebSocket-Extensions")
 	req.Body = nil
 	req.ContentLength = 0
 	req.TransferEncoding = nil

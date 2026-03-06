@@ -115,7 +115,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 			}
 		}
 
-		clientToUpstream, upstreamToClient, tunnelErr := tunnelWebSocket(w, r, upstream)
+		usageCapture := newWebsocketUsageCapture(func(usage TokenUsage) {
+			s.recordTokenUsage(token, path, upstream.resp.StatusCode, true, usage)
+		})
+		clientToUpstream, upstreamToClient, tunnelErr := tunnelWebSocket(w, r, upstream, usageCapture)
 		ctxErr := r.Context().Err()
 		if tunnelErr != nil {
 			slog.Warn(

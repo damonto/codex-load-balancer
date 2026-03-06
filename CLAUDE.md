@@ -68,6 +68,7 @@ func MakeSound(s Speaker) { s.Speak() }
 - **Errors are Values**：错误处理是主逻辑，不是异常分支。
 - **Wrap 与 Unwrap**：
   - 使用 `fmt.Errorf("action failed: %w", err)` 进行包裹。
+  - 使用 `errors.New` 而不是 `fmt.Errorf` 来创建固定错误。
   - 使用 `errors.Is` 和 `errors.As`，**严禁**使用 `err.Error() == "string"` 字符串匹配。
 - **扁平化 (Guard Clauses)**：尽早 `return err`，避免 `else` 缩进地狱。
 - **文案规范**：错误信息**不要**以 failed to, unable to 或 error 开头。直接描述发生的动作（如 reset commit: %w），因为多层错误包裹后会自动拼接成完整的句子（e.g., start server: load config: open file: file not found）。
