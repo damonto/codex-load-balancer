@@ -22,8 +22,8 @@
 - **路由**：Go 1.22+ 使用 `http.ServeMux`。除非路由极其复杂，否则**拒绝**引入 `Gin` 或 `Echo`。
 - **工具箱**：切片/Map 操作使用 `slices` 和 `maps` 包。**拒绝**引入 `lo` 库或手写冗余 `for` 循环。
 - **ORM 决策**：
-  - 小型项目 -> `database/sql` 或 `sqlx`。
-  - 复杂实体关系 -> `sqlc`。
+    - 小型项目 -> `database/sql` 或 `sqlx`。
+    - 复杂实体关系 -> `sqlc`。
 - **依赖管理**：涉及第三方库时，必须提示用户执行 `go mod tidy`。
 
 ### 1.3 拒绝过度抽象
@@ -37,7 +37,7 @@
 
 ### 2.1 结构体与接口 (Interface & Struct)
 
-_贯彻 SOLID 原则中的 ISP (接口隔离) 和 OCP (开闭原则)_
+*贯彻 SOLID 原则中的 ISP (接口隔离) 和 OCP (开闭原则)*
 
 - **接收接口，返回结构体**：函数参数应尽量宽泛（接口），返回值应尽量具体（结构体）。
 - **接口定义在消费者端**：不要预定义 `Animal` 接口。只有当 `Zoo` 函数需要处理多种动物时，才在 `Zoo` 的包里定义 `Speaker` 接口。
@@ -67,9 +67,9 @@ func MakeSound(s Speaker) { s.Speak() }
 
 - **Errors are Values**：错误处理是主逻辑，不是异常分支。
 - **Wrap 与 Unwrap**：
-  - 使用 `fmt.Errorf("action failed: %w", err)` 进行包裹。
-  - 使用 `errors.New` 而不是 `fmt.Errorf` 来创建固定错误。
-  - 使用 `errors.Is` 和 `errors.As`，**严禁**使用 `err.Error() == "string"` 字符串匹配。
+    - 使用 `fmt.Errorf("action failed: %w", err)` 进行包裹。
+    - 使用 `errors.New` 而不是 `fmt.Errorf` 来创建固定错误。
+    - 使用 `errors.Is` 和 `errors.As`，**严禁**使用 `err.Error() == "string"` 字符串匹配。
 - **扁平化 (Guard Clauses)**：尽早 `return err`，避免 `else` 缩进地狱。
 - **文案规范**：错误信息**不要**以 failed to, unable to 或 error 开头。直接描述发生的动作（如 reset commit: %w），因为多层错误包裹后会自动拼接成完整的句子（e.g., start server: load config: open file: file not found）。
 
@@ -93,10 +93,28 @@ if err != nil {
 
 - **Context 传递法则**：`ctx context.Context` 必须是函数的 **第一个参数**。**严禁** 将 Context 放入 Struct 字段中。
 - **生命周期管理**：
-  - 启动 Goroutine 必须知道它何时退出。
-  - 任务型 Goroutine 必须使用 `sync.WaitGroup` 或 `errgroup`。
-  - 长期运行 Goroutine 必须有 `context` 取消或 `close channel` 机制。
+    - 启动 Goroutine 必须知道它何时退出。
+    - 任务型 Goroutine 必须使用 `sync.WaitGroup` 或 `errgroup`。
+    - 长期运行 Goroutine 必须有 `context` 取消或 `close channel` 机制。
 - **锁 vs Channel**：不要为了秀技巧而用 Channel。简单的状态保护（计数器、缓存）直接用 `sync.RWMutex`。
+
+### 2.4 HTTP API 设计 (RESTful Design)
+
+- **面向资源 (Resource-Oriented)**：URL 路径必须是名词及其复数形式。**严禁** 写出 POST /getUser 或 GET /deleteData 这种 RPC 风格的伪 REST。
+- **动词与状态码匹配**：
+    - GET /users -> 获取列表 (200 OK)
+    - POST /users -> 创建资源 (201 Created)
+    - PUT /users/{id} -> 替换资源 (200 OK 或 204 No Content)
+    - DELETE /users/{id} -> 删除资源 (204 No Content)
+- **拥抱 Go 1.25+ 路由**：强制使用标准库的新路由特性绑定 HTTP 动词与路径参数。
+
+    **✅ 现代 Go 路由示范：**
+
+    ```go
+    mux := http.NewServeMux()
+    mux.HandleFunc("GET /users/{id}", handleGetUser)
+    mux.HandleFunc("POST /users", handleCreateUser)
+    ```
 
 ---
 
@@ -106,8 +124,8 @@ if err != nil {
 - **变量习惯**：`ctx`, `err`, `req`, `mu` 是惯例。
 - **注释原则**：解释 **Why** (为什么这么写/有什么坑)，而不是 **What** (这行代码在做什么)。
 - **函数设计**：
-  - **参数缩减**：参数 > 3 个？引入 `Config` 结构体。
-  - **Options 模式**：仅在构造函数极度复杂（5+ 可选参数）时才使用，否则过度设计。
+    - **参数缩减**：参数 > 3 个？引入 `Config` 结构体。
+    - **Options 模式**：仅在构造函数极度复杂（5+ 可选参数）时才使用，否则过度设计。
 
 ---
 
@@ -181,8 +199,9 @@ Context7 是你获取代码实现、确认库名称及查阅官方文档的**唯
 
 在输出代码前，执行以下 CheckList：
 
-- [ ] **是否使用了 `any` / `interface{}` ?** -> 除非写 JSON 解析器或通用容器，否则改成具体类型。
-- [ ] **是否在循环中使用 `defer` ?** -> 警告：可能导致资源无法及时释放。
-- [ ] **是否处理了所有 `err` ?** -> 哪怕是 `_ = func()` 也要显式忽略并注释原因。
-- [ ] **代码是否包含 `package main` 和 `import` ?** -> 必须是一个完整的可运行文件。
-- [ ] **是否使用了新特性？** -> 尽可能使用 Go 1.25+ 新语法（如 `range int`、`min`、`max`）。
+- [ ]  **是否使用了 `any` / `interface{}` ?** -> 除非写 JSON 解析器或通用容器，否则改成具体类型。
+- [ ]  **是否在循环中使用 `defer` ?** -> 警告：可能导致资源无法及时释放。
+- [ ]  **是否处理了所有 `err` ?** -> 哪怕是 `_ = func()` 也要显式忽略并注释原因。
+- [ ]  **代码是否包含 `package main` 和 `import` ?** -> 必须是一个完整的可运行文件。
+- [ ]  **是否使用了新特性？** -> 尽可能使用 Go 1.25+ 新语法（如 `range int`、`min`、`max`）。
+- [ ]  **API 路由设计是否 RESTful？** -> 检查是否存在动词 URL (/get-user)，若有立刻改成名词+正确 HTTP 方法 (GET /users/{id})。
