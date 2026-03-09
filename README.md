@@ -144,7 +144,7 @@ Auth:
 
 Dashboard data:
 
-- Global totals: `input_tokens`, `cached_tokens`, `output_tokens`.
+- Overview cards: `today`, `recent_7_days`, `recent_30_days`, `total` with `input_tokens`, `cached_tokens`, `output_tokens`, `reasoning_tokens`.
 - Account table: totals + 5-hour / weekly quota usage from usage sync (`/backend-api/wham/usage`).
 - Detail view: daily / weekly / monthly token trends.
 

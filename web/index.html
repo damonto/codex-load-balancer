@@ -164,8 +164,8 @@
       var p = payload || {};
       var html = '';
       html += periodCard('Today', p.today);
-      html += periodCard('This Week', p.this_week);
-      html += periodCard('This Month', p.this_month);
+      html += periodCard('Last 7 Days', p.recent_7_days);
+      html += periodCard('Last 30 Days', p.recent_30_days);
       html += periodCard('Total', p.total, true);
       document.getElementById('periodCards').innerHTML = html;
     }

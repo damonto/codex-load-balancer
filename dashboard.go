@@ -21,12 +21,12 @@ var dashboardAssetHandler = http.StripPrefix("/stats/assets/", http.FileServer(h
 var indexHTML = mustReadDashboardFile("index.html")
 
 type dashboardOverviewResponse struct {
-	GeneratedAt time.Time          `json:"generated_at"`
-	Today       dashboardTotals    `json:"today"`
-	ThisWeek    dashboardTotals    `json:"this_week"`
-	ThisMonth   dashboardTotals    `json:"this_month"`
-	Total       dashboardTotals    `json:"total"`
-	Accounts    []dashboardAccount `json:"accounts"`
+	GeneratedAt  time.Time          `json:"generated_at"`
+	Today        dashboardTotals    `json:"today"`
+	Recent7Days  dashboardTotals    `json:"recent_7_days"`
+	Recent30Days dashboardTotals    `json:"recent_30_days"`
+	Total        dashboardTotals    `json:"total"`
+	Accounts     []dashboardAccount `json:"accounts"`
 }
 
 type dashboardTotals struct {
@@ -173,12 +173,12 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 	}
 
 	resp := dashboardOverviewResponse{
-		GeneratedAt: time.Now().UTC(),
-		Today:       totals(periods.Daily),
-		ThisWeek:    totals(periods.Weekly),
-		ThisMonth:   totals(periods.Monthly),
-		Total:       totals(periods.Total),
-		Accounts:    accounts,
+		GeneratedAt:  time.Now().UTC(),
+		Today:        totals(periods.Daily),
+		Recent7Days:  totals(periods.Recent7Days),
+		Recent30Days: totals(periods.Recent30Days),
+		Total:        totals(periods.Total),
+		Accounts:     accounts,
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

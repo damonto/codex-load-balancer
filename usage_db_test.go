@@ -9,6 +9,109 @@ import (
 	"time"
 )
 
+func TestGlobalPeriodTotalsUsesRollingWindows(t *testing.T) {
+	tests := []struct {
+		name       string
+		records    []UsageRecord
+		wantDay    int64
+		want7Days  int64
+		want30Days int64
+		wantTotal  int64
+	}{
+		{
+			name: "splits today recent windows and total",
+			records: func() []UsageRecord {
+				now := time.Now().UTC()
+				dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+				return []UsageRecord{
+					{
+						AccountKey:      "acct_1",
+						TokenID:         "tok_today",
+						Path:            "/v1/responses",
+						StatusCode:      200,
+						InputTokens:     10,
+						CachedTokens:    2,
+						OutputTokens:    3,
+						ReasoningTokens: 1,
+						CreatedAt:       dayStart,
+					},
+					{
+						AccountKey:      "acct_1",
+						TokenID:         "tok_6d",
+						Path:            "/v1/responses",
+						StatusCode:      200,
+						InputTokens:     20,
+						CachedTokens:    1,
+						OutputTokens:    4,
+						ReasoningTokens: 2,
+						CreatedAt:       now.AddDate(0, 0, -6),
+					},
+					{
+						AccountKey:      "acct_1",
+						TokenID:         "tok_20d",
+						Path:            "/v1/responses",
+						StatusCode:      200,
+						InputTokens:     30,
+						CachedTokens:    5,
+						OutputTokens:    6,
+						ReasoningTokens: 3,
+						CreatedAt:       now.AddDate(0, 0, -20),
+					},
+					{
+						AccountKey:      "acct_1",
+						TokenID:         "tok_40d",
+						Path:            "/v1/responses",
+						StatusCode:      200,
+						InputTokens:     40,
+						CachedTokens:    6,
+						OutputTokens:    7,
+						ReasoningTokens: 4,
+						CreatedAt:       now.AddDate(0, 0, -40),
+					},
+				}
+			}(),
+			wantDay:    15,
+			want7Days:  40,
+			want30Days: 81,
+			wantTotal:  134,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			usageDB, err := openUsageDB(filepath.Join(t.TempDir(), "usage.db"))
+			if err != nil {
+				t.Fatalf("openUsageDB() error = %v", err)
+			}
+			defer usageDB.Close()
+
+			for _, rec := range tt.records {
+				if err := usageDB.InsertUsage(context.Background(), rec); err != nil {
+					t.Fatalf("InsertUsage() error = %v", err)
+				}
+			}
+
+			got, err := usageDB.GlobalPeriodTotals(context.Background())
+			if err != nil {
+				t.Fatalf("GlobalPeriodTotals() error = %v", err)
+			}
+
+			if got.Daily.TotalTokens() != tt.wantDay {
+				t.Fatalf("Daily.TotalTokens() = %d, want %d", got.Daily.TotalTokens(), tt.wantDay)
+			}
+			if got.Recent7Days.TotalTokens() != tt.want7Days {
+				t.Fatalf("Recent7Days.TotalTokens() = %d, want %d", got.Recent7Days.TotalTokens(), tt.want7Days)
+			}
+			if got.Recent30Days.TotalTokens() != tt.want30Days {
+				t.Fatalf("Recent30Days.TotalTokens() = %d, want %d", got.Recent30Days.TotalTokens(), tt.want30Days)
+			}
+			if got.Total.TotalTokens() != tt.wantTotal {
+				t.Fatalf("Total.TotalTokens() = %d, want %d", got.Total.TotalTokens(), tt.wantTotal)
+			}
+		})
+	}
+}
+
 func TestOpenUsageDBReasoningTokensMigration(t *testing.T) {
 	tests := []struct {
 		name              string

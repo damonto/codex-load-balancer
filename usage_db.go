@@ -226,17 +226,17 @@ FROM usage_events
 }
 
 type GlobalPeriodTotals struct {
-	Daily   UsageTotals
-	Weekly  UsageTotals
-	Monthly UsageTotals
-	Total   UsageTotals
+	Daily        UsageTotals
+	Recent7Days  UsageTotals
+	Recent30Days UsageTotals
+	Total        UsageTotals
 }
 
 func (s *UsageDB) GlobalPeriodTotals(ctx context.Context) (GlobalPeriodTotals, error) {
 	now := time.Now().UTC()
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	weekStart := weekStartUTC(now)
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	sevenDayStart := now.AddDate(0, 0, -7)
+	thirtyDayStart := now.AddDate(0, 0, -30)
 
 	var r GlobalPeriodTotals
 	err := s.db.QueryRowContext(ctx, `
@@ -258,15 +258,15 @@ SELECT
 	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN output_tokens ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN reasoning_tokens ELSE 0 END), 0)
 FROM usage_events
-`,
+	`,
 		dayStart.Unix(), dayStart.Unix(), dayStart.Unix(), dayStart.Unix(),
-		weekStart.Unix(), weekStart.Unix(), weekStart.Unix(), weekStart.Unix(),
-		monthStart.Unix(), monthStart.Unix(), monthStart.Unix(), monthStart.Unix(),
+		sevenDayStart.Unix(), sevenDayStart.Unix(), sevenDayStart.Unix(), sevenDayStart.Unix(),
+		thirtyDayStart.Unix(), thirtyDayStart.Unix(), thirtyDayStart.Unix(), thirtyDayStart.Unix(),
 	).Scan(
 		&r.Total.InputTokens, &r.Total.CachedTokens, &r.Total.OutputTokens, &r.Total.ReasoningTokens,
 		&r.Daily.InputTokens, &r.Daily.CachedTokens, &r.Daily.OutputTokens, &r.Daily.ReasoningTokens,
-		&r.Weekly.InputTokens, &r.Weekly.CachedTokens, &r.Weekly.OutputTokens, &r.Weekly.ReasoningTokens,
-		&r.Monthly.InputTokens, &r.Monthly.CachedTokens, &r.Monthly.OutputTokens, &r.Monthly.ReasoningTokens,
+		&r.Recent7Days.InputTokens, &r.Recent7Days.CachedTokens, &r.Recent7Days.OutputTokens, &r.Recent7Days.ReasoningTokens,
+		&r.Recent30Days.InputTokens, &r.Recent30Days.CachedTokens, &r.Recent30Days.OutputTokens, &r.Recent30Days.ReasoningTokens,
 	)
 	if err != nil {
 		return GlobalPeriodTotals{}, fmt.Errorf("query global period totals: %w", err)
