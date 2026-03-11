@@ -12,18 +12,12 @@ import (
 	"time"
 )
 
-const (
-	stripeCheckoutBaseURL = "https://checkout.stripe.com/c/pay/"
-
-	StripePaymentMethodURL = "https://api.stripe.com/v1/payment_methods"
-	StripeConfirmURL       = "https://api.stripe.com/v1/payment_pages/%s/confirm"
-	StripeVerifyChallenge  = "https://api.stripe.com/v1/setup_intents/%s/verify_challenge"
-)
-
 var (
 	telegramAPIBaseURL = "https://api.telegram.org"
 	telegramHTTPClient = &http.Client{Timeout: 15 * time.Second}
 )
+
+const stripeFixedHash = "fidnandhYHdWcXxpYCc%2FJ2FgY2RwaXEnKSdpamZkaWAnPydgaycpJ3ZwZ3Zmd2x1cWxqa1BrbHRwYGtgdnZAa2RnaWBhJz9jZGl2YCknZHVsTmB8Jz8ndW5aaWxzYFowNE1Kd1ZyRjNtNGt9QmpMNmlRRGJXb1xTd38xYVA2Y1NKZGd8RmZOVzZ1Z0BPYnBGU0RpdEZ9YX1GUHNqV200XVJyV2RmU2xqc1A2bklOc3Vub20yTHRuUjU1bF1Udm9qNmsnKSdjd2poVmB3c2B3Jz9xd3BgKSdnZGZuYndqcGthRmppancnPycmY2NjY2NjJyknaWR8anBxUXx1YCc%2FJ3Zsa2JpYFpscWBoJyknYGtkZ2lgVWlkZmBtamlhYHd2Jz9xd3BgeCUl"
 
 type Purchase struct {
 	client           *client
@@ -51,8 +45,6 @@ type checkoutPromoCampaign struct {
 
 type checkoutResponse struct {
 	CheckoutSessionID string `json:"checkout_session_id"`
-	HostedURL         string `json:"checkout_url"`
-	URL               string `json:"url"`
 	PublishableKey    string `json:"publishable_key"`
 	ClientSecret      string `json:"client_secret"`
 }
@@ -67,17 +59,12 @@ type telegramSendMessageResponse struct {
 	Description string `json:"description"`
 }
 
-func (c checkoutResponse) CheckoutURL() (string, error) {
-	if url := strings.TrimSpace(c.URL); url != "" {
-		return url, nil
-	}
-	if url := strings.TrimSpace(c.HostedURL); url != "" {
-		return url, nil
-	}
-	if c.CheckoutSessionID == "" {
-		return "", errors.New("checkout response missing checkout session id")
-	}
-	return stripeCheckoutBaseURL + c.CheckoutSessionID, nil
+func (c checkoutResponse) String() string {
+	return fmt.Sprintf(
+		"https://checkout.stripe.com/c/pay/%s#%s",
+		c.CheckoutSessionID,
+		stripeFixedHash,
+	)
 }
 
 func NewPurchase(client *client, session ChatGPTSession, telegramBotToken string, telegramChatID string) *Purchase {
@@ -94,11 +81,7 @@ func (p *Purchase) CheckoutURL(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	checkoutURL, err := checkout.CheckoutURL()
-	if err != nil {
-		return "", err
-	}
-	return checkoutURL, nil
+	return checkout.String(), nil
 }
 
 func (p *Purchase) requestCheckoutURL(ctx context.Context) (checkoutResponse, error) {

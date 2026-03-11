@@ -102,7 +102,7 @@ func topUpMissingAccounts(ctx context.Context, store *TokenStore, dataDir string
 		}
 
 		requested := remaining
-		succeeded, err := registerBatch(ctx, store, dataDir, requested, trial, opts)
+		succeeded, err := registerBatch(ctx, dataDir, requested, trial, opts)
 		if err != nil {
 			return err
 		}
@@ -138,7 +138,6 @@ func topUpMissingAccounts(ctx context.Context, store *TokenStore, dataDir string
 
 func registerBatch(
 	ctx context.Context,
-	store *TokenStore,
 	dataDir string,
 	attempts int,
 	trial int,
