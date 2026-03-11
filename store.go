@@ -206,7 +206,7 @@ func (s *TokenStore) UpdateUsageAccountMetadata(id string, metadata usageAccount
 	s.mu.Lock()
 	token, ok := s.tokens[id]
 	if ok {
-		if metadata.AccountID != "" {
+		if token.AccountID == "" && metadata.AccountID != "" {
 			token.AccountID = metadata.AccountID
 		}
 		if metadata.Email != "" {

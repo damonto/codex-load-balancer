@@ -142,14 +142,14 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 		if quota, ok := accountQuotaSnapshots[summary.AccountKey]; ok {
 			if quota.HasFiveHour {
 				account.Has5hQuota = true
-				account.Used5hTokens = roundFloatToInt64(quota.FiveHourUsed)
-				account.Quota5hTokens = roundFloatToInt64(quota.FiveHourMax)
+				account.Used5hTokens = int64(math.Round(quota.FiveHourUsed))
+				account.Quota5hTokens = int64(math.Round(quota.FiveHourMax))
 				account.FiveHourResetAt = optionalTime(quota.FiveHourResetAt)
 			}
 			if quota.HasWeekly {
 				account.HasWeekQuota = true
-				account.UsedWeekTokens = roundFloatToInt64(quota.WeeklyUsed)
-				account.QuotaWeekTokens = roundFloatToInt64(quota.WeeklyMax)
+				account.UsedWeekTokens = int64(math.Round(quota.WeeklyUsed))
+				account.QuotaWeekTokens = int64(math.Round(quota.WeeklyMax))
 				account.WeeklyResetAt = optionalTime(quota.WeeklyResetAt)
 			}
 			if !account.Has5hQuota && account.HasWeekQuota {
@@ -211,10 +211,10 @@ func (s *Server) handleDashboardAccount(w http.ResponseWriter, r *http.Request) 
 	quota5h := int64(0)
 	quotaWeek := int64(0)
 	if quota.HasFiveHour {
-		quota5h = roundFloatToInt64(quota.FiveHourMax)
+		quota5h = int64(math.Round(quota.FiveHourMax))
 	}
 	if quota.HasWeekly {
-		quotaWeek = roundFloatToInt64(quota.WeeklyMax)
+		quotaWeek = int64(math.Round(quota.WeeklyMax))
 	}
 
 	resp := dashboardAccountResponse{
@@ -240,10 +240,6 @@ func (s *Server) handleDashboardAccount(w http.ResponseWriter, r *http.Request) 
 	if err := enc.Encode(resp); err != nil {
 		slog.Warn("encode account dashboard", "account", accountKey, "err", err)
 	}
-}
-
-func roundFloatToInt64(value float64) int64 {
-	return int64(math.Round(value))
 }
 
 func optionalTime(value time.Time) *time.Time {

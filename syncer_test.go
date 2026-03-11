@@ -37,7 +37,7 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 		wantPlanType     string
 	}{
 		{
-			name:             "usage metadata overwrites token-derived values",
+			name:             "usage metadata keeps token-derived account id",
 			initialAccountID: "account-1",
 			initialEmail:     "legacy@example.com",
 			initialPlanType:  "Legacy",
@@ -45,7 +45,7 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 			usageAccountID:   "account-2",
 			usageEmail:       "fresh@example.com",
 			usagePlanType:    "plus",
-			wantAccountID:    "account-2",
+			wantAccountID:    "account-1",
 			wantEmail:        "fresh@example.com",
 			wantPlanType:     "plus",
 		},
@@ -62,15 +62,15 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 			wantPlanType:     "Legacy",
 		},
 		{
-			name:             "user id does not overwrite account id",
+			name:             "usage account id fills blank token account id",
 			initialAccountID: "",
 			initialEmail:     "legacy@example.com",
 			initialPlanType:  "Legacy",
 			usageUserID:      "user-fallback",
-			usageAccountID:   "",
+			usageAccountID:   "account-filled",
 			usageEmail:       "",
 			usagePlanType:    "",
-			wantAccountID:    "",
+			wantAccountID:    "account-filled",
 			wantEmail:        "legacy@example.com",
 			wantPlanType:     "Legacy",
 		},
