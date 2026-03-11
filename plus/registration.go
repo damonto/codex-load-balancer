@@ -1,19 +1,18 @@
-package account
+package plus
 
 import (
 	"context"
 	"fmt"
 	"regexp"
 	"time"
-
-	tls_client "github.com/bogdanfinn/tls-client"
 )
 
 const (
-	authBaseURL         = "https://auth.openai.com"
-	chatgptBaseURL      = "https://chatgpt.com"
+	authOriginURL       = "https://auth.openai.com"
+	chatgptURL          = "https://chatgpt.com"
 	codexClientID       = "app_EMoamEEZ73f0CkXaXp7hrann"
 	codexRedirectURI    = "http://localhost:1455/auth/callback"
+	PendingDirName      = "pending"
 	defaultDataDir      = "data"
 	defaultOTPPoll      = 5 * time.Second
 	defaultOTPWait      = 3 * time.Minute
@@ -37,16 +36,17 @@ const (
 var (
 	otpPattern           = regexp.MustCompile(`\b(\d{6})\b`)
 	oauthCallbackPattern = buildOAuthCallbackPattern(codexRedirectURI)
-	codexRedirectBaseURL = buildRedirectBaseURL(codexRedirectURI)
+	codexRedirectURL     = buildRedirectURL(codexRedirectURI)
 )
 
 type RegisterOptions struct {
 	DataDir             string
 	OTPWait             time.Duration
 	OTPPoll             time.Duration
-	Password            string
 	Proxy               string
 	RegistrationProxies []string
+	TelegramBotToken    string
+	TelegramChatID      string
 }
 
 type AuthTokens struct {
@@ -56,33 +56,35 @@ type AuthTokens struct {
 }
 
 type RegisterResult struct {
-	Email     string
-	Proxy     string
-	AccountID string
-	Tokens    AuthTokens
-	FilePath  string
+	Email       string
+	Proxy       string
+	AccountID   string
+	Session     ChatGPTSession
+	Tokens      AuthTokens
+	CheckoutURL string
+	FilePath    string
 }
 
 type registrationConfig struct {
-	Proxy    string
-	DataDir  string
-	OTPWait  time.Duration
-	OTPPoll  time.Duration
-	Password string
+	Proxy            string
+	DataDir          string
+	OTPWait          time.Duration
+	OTPPoll          time.Duration
+	TelegramBotToken string
+	TelegramChatID   string
 }
 
 type registrationFlow struct {
-	cfg              registrationConfig
-	client           tls_client.HttpClient
-	noRedirectClient tls_client.HttpClient
-	oaiDID           string
-	email            string
-	password         string
-	name             string
-	birthdate        string
-	codeVerifier     string
-	state            string
-	codeChallenge    string
+	cfg           registrationConfig
+	client        *client
+	oaiDID        string
+	email         string
+	password      string
+	name          string
+	birthdate     string
+	codeVerifier  string
+	state         string
+	codeChallenge string
 }
 
 type workspace struct {
@@ -108,6 +110,8 @@ type credentialFile struct {
 	AuthMode     string        `json:"auth_mode"`
 	OpenAIAPIKey *string       `json:"OPENAI_API_KEY"`
 	LastRefresh  string        `json:"last_refresh"`
+	CheckoutURL  string        `json:"checkout_url,omitempty"`
+	CreatedAt    string        `json:"created_at,omitempty"`
 	Tokens       credentialJWT `json:"tokens"`
 }
 
@@ -118,7 +122,8 @@ type credentialJWT struct {
 	AccountID    string `json:"account_id"`
 }
 
-// RegisterCodexCredential executes registration + OTP verification + Codex login and writes token JSON to data dir.
+// RegisterCodexCredential executes registration + Codex login + checkout creation,
+// then writes a pending credential file under data/pending.
 func RegisterCodexCredential(ctx context.Context, opts RegisterOptions) (RegisterResult, error) {
 	cfg, err := normalizeOptions(opts)
 	if err != nil {

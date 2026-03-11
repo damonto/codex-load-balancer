@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,18 +22,13 @@ type usageSyncOptions struct {
 	Concurrency int
 }
 
-func normalizeUsageSyncOptions(opts usageSyncOptions) usageSyncOptions {
-	if opts.Interval <= 0 {
-		opts.Interval = defaultUsageSyncInterval
-	}
-	if opts.Concurrency <= 0 {
-		opts.Concurrency = defaultUsageSyncConcurrency
-	}
-	return opts
-}
-
 func runUsageSyncer(ctx context.Context, store *TokenStore, dataDir string, usageURL string, syncOpts usageSyncOptions, topUpOpts topUpOptions) {
-	syncOpts = normalizeUsageSyncOptions(syncOpts)
+	if syncOpts.Interval <= 0 {
+		syncOpts.Interval = defaultUsageSyncInterval
+	}
+	if syncOpts.Concurrency <= 0 {
+		syncOpts.Concurrency = defaultUsageSyncConcurrency
+	}
 	client := &http.Client{Timeout: 15 * time.Second}
 	syncUsageOnce(ctx, store, client, dataDir, usageURL, syncOpts, topUpOpts)
 	ticker := time.NewTicker(syncOpts.Interval)
@@ -76,9 +72,14 @@ func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, 
 		return
 	}
 
-	slog.Warn("usage sync removed unauthorized tokens", "removed", n)
-	if err := topUpMissingAccounts(ctx, store, dataDir, n, topUpOpts); err != nil && ctx.Err() == nil {
-		slog.Warn("usage sync account top-up", "removed", n, "err", err)
+	slog.Warn("usage sync removed tokens", "removed", n)
+	opts := topUpOpts
+	target := store.ValidAccountCount() + n
+	if opts.TargetCount < target {
+		opts.TargetCount = target
+	}
+	if err := topUpAccounts(ctx, store, dataDir, opts); err != nil && ctx.Err() == nil {
+		slog.Warn("usage sync account top-up", "removed", n, "target", opts.TargetCount, "err", err)
 	}
 }
 
@@ -95,38 +96,58 @@ func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, u
 	}
 
 	snapshot, err := fetchUsage(ctx, client, usageURL, ref)
+	if err != nil && errors.Is(err, errUnauthorized) {
+		forced, refreshErr := maybeRefreshToken(ctx, store, ref.ID, defaultProxyRefreshConfig())
+		if refreshErr != nil {
+			slog.Warn("token refresh failed after usage unauthorized", "token", ref.ID, "err", refreshErr)
+		} else if forced {
+			if token, ok := store.TokenSnapshot(ref.ID); ok {
+				ref.Token = token.Token
+				ref.AccountID = token.AccountID
+			}
+			snapshot, err = fetchUsage(ctx, client, usageURL, ref)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, errUnauthorized) {
-			return removeTokenAfterUsageUnauthorized(store, ref.ID)
-		} else {
-			slog.Warn("usage sync failed", "token", ref.ID, "err", err)
-			return false
+			return removeTokenAfterUsageRemoval(store, ref.ID, "unauthorized")
 		}
+		slog.Warn("usage sync failed", "token", ref.ID, "err", err)
+		return false
+	}
+	if strings.EqualFold(snapshot.PlanType, "free") {
+		return removeTokenAfterUsageRemoval(store, ref.ID, "free_plan")
 	}
 	if !snapshot.FiveHour.Known && !snapshot.Weekly.Known {
 		slog.Warn("usage sync missing quota windows", "token", ref.ID)
 	}
 	store.UpdateUsage(ref.ID, snapshot.FiveHour, snapshot.Weekly, time.Now())
+	store.UpdateUsageAccountMetadata(ref.ID, usageAccountMetadata{
+		UserID:    snapshot.UserID,
+		AccountID: snapshot.AccountID,
+		Email:     snapshot.Email,
+		PlanType:  snapshot.PlanType,
+	})
 	return false
 }
 
-func removeTokenAfterUsageUnauthorized(store *TokenStore, tokenID string) bool {
+func removeTokenAfterUsageRemoval(store *TokenStore, tokenID string, reason string) bool {
 	token, ok := store.RemoveToken(tokenID)
 	if !ok {
-		slog.Warn("token missing on usage unauthorized removal", "token", tokenID)
+		slog.Warn("token missing on usage removal", "token", tokenID, "reason", reason)
 		return false
 	}
 
 	if token.Path == "" {
-		slog.Warn("token removed after usage unauthorized", "token", tokenID, "reason", "missing token path")
+		slog.Warn("token removed after usage sync", "token", tokenID, "reason", reason, "path_reason", "missing_token_path")
 		return true
 	}
 
 	if err := os.Remove(token.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Warn("remove token file after usage unauthorized", "token", tokenID, "path", token.Path, "err", err)
+		slog.Warn("remove token file after usage sync", "token", tokenID, "path", token.Path, "reason", reason, "err", err)
 		return true
 	}
 
-	slog.Warn("token removed after usage unauthorized", "token", tokenID, "path", token.Path)
+	slog.Warn("token removed after usage sync", "token", tokenID, "path", token.Path, "reason", reason)
 	return true
 }

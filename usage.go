@@ -12,6 +12,10 @@ import (
 )
 
 type rateLimitStatusPayload struct {
+	UserID               string                       `json:"user_id"`
+	AccountID            string                       `json:"account_id"`
+	Email                string                       `json:"email"`
+	PlanType             string                       `json:"plan_type"`
 	RateLimit            *rateLimitStatusDetails      `json:"rate_limit"`
 	AdditionalRateLimits []additionalRateLimitDetails `json:"additional_rate_limits"`
 }
@@ -37,8 +41,12 @@ type additionalRateLimitDetails struct {
 }
 
 type UsageSnapshot struct {
-	FiveHour WindowUsage
-	Weekly   WindowUsage
+	UserID    string
+	AccountID string
+	Email     string
+	FiveHour  WindowUsage
+	Weekly    WindowUsage
+	PlanType  string
 }
 
 var errUnauthorized = errors.New("unauthorized")
@@ -63,16 +71,15 @@ func fetchUsage(ctx context.Context, client *http.Client, usageURL string, ref T
 		return UsageSnapshot{}, errUnauthorized
 	}
 	if resp.StatusCode != http.StatusOK {
-		return UsageSnapshot{}, fmt.Errorf("usage request status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return UsageSnapshot{}, fmt.Errorf("read usage response: %w", err)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return UsageSnapshot{}, fmt.Errorf("read usage response: %w", err)
+		}
+		return UsageSnapshot{}, fmt.Errorf("usage request status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var payload rateLimitStatusPayload
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return UsageSnapshot{}, fmt.Errorf("decode usage response: %w", err)
 	}
 
@@ -90,11 +97,16 @@ func mapUsageSnapshot(payload rateLimitStatusPayload) UsageSnapshot {
 		}
 		detailsList = append(detailsList, additional.RateLimit)
 	}
+	snapshot := UsageSnapshot{
+		UserID:    payload.UserID,
+		AccountID: payload.AccountID,
+		Email:     payload.Email,
+		PlanType:  payload.PlanType,
+	}
 	if len(detailsList) == 0 {
-		return UsageSnapshot{}
+		return snapshot
 	}
 
-	var snapshot UsageSnapshot
 	for _, details := range detailsList {
 		current := mapUsageSnapshotFromDetails(details)
 		if !snapshot.FiveHour.Known && current.FiveHour.Known {
@@ -138,23 +150,20 @@ func mapUsageSnapshotFromDetails(details *rateLimitStatusDetails) UsageSnapshot 
 }
 
 func fallbackSnapshotWindows(details *rateLimitStatusDetails) (WindowUsage, WindowUsage, bool, bool) {
-	primary := details.PrimaryWindow
-	secondary := details.SecondaryWindow
-
-	if primary != nil && secondary != nil {
-		return windowUsageFromSnapshot(primary), windowUsageFromSnapshot(secondary), true, true
+	if details.PrimaryWindow != nil && details.SecondaryWindow != nil {
+		return windowUsageFromSnapshot(details.PrimaryWindow), windowUsageFromSnapshot(details.SecondaryWindow), true, true
 	}
-	if secondary != nil {
-		return WindowUsage{}, windowUsageFromSnapshot(secondary), false, true
+	if details.SecondaryWindow != nil {
+		return WindowUsage{}, windowUsageFromSnapshot(details.SecondaryWindow), false, true
 	}
-	if primary == nil {
+	if details.PrimaryWindow == nil {
 		return WindowUsage{}, WindowUsage{}, false, false
 	}
 
-	if isLikelyFiveHourWindow(primary) {
-		return windowUsageFromSnapshot(primary), WindowUsage{}, true, false
+	if isLikelyFiveHourWindow(details.PrimaryWindow) {
+		return windowUsageFromSnapshot(details.PrimaryWindow), WindowUsage{}, true, false
 	}
-	return WindowUsage{}, windowUsageFromSnapshot(primary), false, true
+	return WindowUsage{}, windowUsageFromSnapshot(details.PrimaryWindow), false, true
 }
 
 func isLikelyFiveHourWindow(snapshot *rateLimitWindowSnapshot) bool {

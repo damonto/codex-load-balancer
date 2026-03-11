@@ -39,13 +39,15 @@ Startup flag:
 `config.toml` keys:
 
 - `api_key` (required): API key for protected interfaces.
-- `data_dir` (required): Directory containing `*.json` auth files.
+- `data_dir` (required): Directory containing active `*.json` auth files; in-flight purchases are stored under `data_dir/pending`.
 - `server.port` (optional): Listen port (default 8080).
-- `top_up.min_valid_accounts` (optional): Background top-up target at startup (0 disables startup top-up).
+- `top_up.min_tracked_accounts` (optional): Background top-up target. The balancer currently uses `active + parseable pending` to decide whether more registrations are needed (0 disables startup top-up).
 - `top_up.register_workers` (optional): Concurrent registration workers for startup/runtime top-up (default 5).
 - `top_up.register_timeout_seconds` (optional): Per-registration timeout (default 360).
 - `sync.usage_sync_interval_seconds` (optional): Usage sync interval (default 300).
 - `sync.usage_sync_concurrency` (optional): Usage sync concurrency (default 8).
+- `telegram.bot_token` (optional): Telegram bot token used to push the checkout URL. If omitted together with `telegram.chat_id`, the checkout URL is only written into `data_dir/pending/*.json`.
+- `telegram.chat_id` (optional): Telegram target chat ID or channel username; keep it as a string in TOML. `telegram.bot_token` and `telegram.chat_id` must be configured together.
 - `account.registration_proxy_pool` (required): Registration proxy pool for account top-up.
 
 Current example:
@@ -58,13 +60,17 @@ data_dir = "/app/data"
 port = 8080
 
 [top_up]
-min_valid_accounts = 0
+min_tracked_accounts = 0
 register_workers = 5
 register_timeout_seconds = 360
 
 [sync]
 usage_sync_interval_seconds = 300
 usage_sync_concurrency = 8
+
+[telegram]
+bot_token = "123456:telegram-bot-token"
+chat_id = "123456789"
 
 [account]
 registration_proxy_pool = [
@@ -76,6 +82,8 @@ Notes:
 
 - Unknown config keys cause startup failure.
 - `account.registration_proxy_pool` must contain at least one non-empty proxy URL.
+- Telegram 推送使用官方 `sendMessage` 接口，实际会发送 `chat_id` 和支付链接文本；如果未配置 Telegram，checkout URL 只会保存在 pending 凭证文件里。
+- 新注册账号会先写入 `data_dir/pending/*.json`；后台轮询 `usage` 发现 `plan_type=plus` 后，再自动提升到 `data_dir/*.json`。
 
 ## Token File Format
 
@@ -126,7 +134,9 @@ If the upstream responds with status `429` or contains `"You've hit your usage l
 
 - Syncs at startup and every 5 minutes.
 - Uses `https://chatgpt.com/backend-api/wham/usage`.
-- On `401` during sync, Codex load balancer removes the token file, evicts the token from memory, and tops up the same count with new registrations.
+- Account metadata shown in the dashboard, including `email` and `plan_type`, comes from the usage response in real time.
+- On `401` during sync, Codex load balancer first attempts one forced refresh; if usage still returns `401`, it removes the token file, evicts the token from memory, and tops up the same count with new registrations.
+- If usage reports `plan_type=free`, Codex load balancer treats the account as downgraded, removes it, and tops up a replacement account.
 
 ## Dashboard
 
@@ -145,7 +155,7 @@ Auth:
 Dashboard data:
 
 - Overview cards: `today`, `recent_7_days`, `recent_30_days`, `total` with `input_tokens`, `cached_tokens`, `output_tokens`, `reasoning_tokens`.
-- Account table: totals + 5-hour / weekly quota usage from usage sync (`/backend-api/wham/usage`).
+- Account table: `email`, `plan_type`, totals, and 5-hour / weekly quota usage from usage sync (`/backend-api/wham/usage`).
 - Detail view: daily / weekly / monthly token trends.
 
 ## Logs

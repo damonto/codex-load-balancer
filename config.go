@@ -14,24 +14,27 @@ const defaultConfigPath = "config.toml"
 const defaultPort = 8080
 
 type appConfig struct {
-	apiKey           string
-	dataDir          string
-	port             int
-	minValidAccounts int
-	registerWorkers  int
-	registerTimeout  time.Duration
-	proxyPool        []string
-	syncInterval     time.Duration
-	syncConcurrency  int
+	apiKey             string
+	dataDir            string
+	port               int
+	minTrackedAccounts int
+	registerWorkers    int
+	registerTimeout    time.Duration
+	proxyPool          []string
+	telegramBotToken   string
+	telegramChatID     string
+	syncInterval       time.Duration
+	syncConcurrency    int
 }
 
 type fileConfig struct {
-	APIKey  string            `toml:"api_key"`
-	DataDir string            `toml:"data_dir"`
-	Server  fileServerConfig  `toml:"server"`
-	TopUp   fileTopUpConfig   `toml:"top_up"`
-	Sync    fileSyncConfig    `toml:"sync"`
-	Account fileAccountConfig `toml:"account"`
+	APIKey   string             `toml:"api_key"`
+	DataDir  string             `toml:"data_dir"`
+	Server   fileServerConfig   `toml:"server"`
+	TopUp    fileTopUpConfig    `toml:"top_up"`
+	Sync     fileSyncConfig     `toml:"sync"`
+	Account  fileAccountConfig  `toml:"account"`
+	Telegram fileTelegramConfig `toml:"telegram"`
 }
 
 type fileServerConfig struct {
@@ -39,7 +42,7 @@ type fileServerConfig struct {
 }
 
 type fileTopUpConfig struct {
-	MinValidAccounts       int `toml:"min_valid_accounts"`
+	MinTrackedAccounts     int `toml:"min_tracked_accounts"`
 	RegisterWorkers        int `toml:"register_workers"`
 	RegisterTimeoutSeconds int `toml:"register_timeout_seconds"`
 }
@@ -51,6 +54,11 @@ type fileSyncConfig struct {
 
 type fileAccountConfig struct {
 	RegistrationProxyPool []string `toml:"registration_proxy_pool"`
+}
+
+type fileTelegramConfig struct {
+	BotToken string `toml:"bot_token"`
+	ChatID   string `toml:"chat_id"`
 }
 
 func loadAppConfigFile(path string) (appConfig, error) {
@@ -71,14 +79,16 @@ func loadAppConfigFile(path string) (appConfig, error) {
 	}
 
 	cfg := appConfig{
-		apiKey:           strings.TrimSpace(fc.APIKey),
-		dataDir:          strings.TrimSpace(fc.DataDir),
-		port:             fc.Server.Port,
-		minValidAccounts: fc.TopUp.MinValidAccounts,
-		registerWorkers:  fc.TopUp.RegisterWorkers,
-		registerTimeout:  secondsOrDefault(fc.TopUp.RegisterTimeoutSeconds, defaultRegisterTimeout),
-		syncInterval:     secondsOrDefault(fc.Sync.UsageSyncIntervalSeconds, defaultUsageSyncInterval),
-		syncConcurrency:  fc.Sync.UsageSyncConcurrency,
+		apiKey:             strings.TrimSpace(fc.APIKey),
+		dataDir:            strings.TrimSpace(fc.DataDir),
+		port:               fc.Server.Port,
+		minTrackedAccounts: fc.TopUp.MinTrackedAccounts,
+		registerWorkers:    fc.TopUp.RegisterWorkers,
+		registerTimeout:    secondsOrDefault(fc.TopUp.RegisterTimeoutSeconds, defaultRegisterTimeout),
+		telegramBotToken:   strings.TrimSpace(fc.Telegram.BotToken),
+		telegramChatID:     strings.TrimSpace(fc.Telegram.ChatID),
+		syncInterval:       secondsOrDefault(fc.Sync.UsageSyncIntervalSeconds, defaultUsageSyncInterval),
+		syncConcurrency:    fc.Sync.UsageSyncConcurrency,
 	}
 	if cfg.port <= 0 {
 		cfg.port = defaultPort
@@ -86,11 +96,14 @@ func loadAppConfigFile(path string) (appConfig, error) {
 	if cfg.registerWorkers <= 0 {
 		cfg.registerWorkers = defaultRegisterWorkers
 	}
-	if cfg.minValidAccounts < 0 {
-		cfg.minValidAccounts = 0
+	if cfg.minTrackedAccounts < 0 {
+		cfg.minTrackedAccounts = 0
 	}
 	if cfg.syncConcurrency <= 0 {
 		cfg.syncConcurrency = defaultUsageSyncConcurrency
+	}
+	if (cfg.telegramBotToken == "") != (cfg.telegramChatID == "") {
+		return appConfig{}, errors.New("telegram.bot_token and telegram.chat_id must be set together")
 	}
 
 	cfg.proxyPool, err = normalizeProxyPool(fc.Account.RegistrationProxyPool)

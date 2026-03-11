@@ -1,4 +1,4 @@
-package account
+package plus
 
 import (
 	"bytes"
@@ -60,7 +60,7 @@ func (r *registrationFlow) finalizeCodexOAuth(ctx context.Context) (AuthTokens, 
 func (r *registrationFlow) initPKCE() error {
 	codeVerifier, err := randomBase64URL(64)
 	if err != nil {
-		return fmt.Errorf("generate code_verifier: %w", err)
+		return fmt.Errorf("generate code verifier: %w", err)
 	}
 	state, err := randomHexString(16)
 	if err != nil {
@@ -87,18 +87,12 @@ func (r *registrationFlow) initCodexOAuth(ctx context.Context) (string, error) {
 		"scope":                      {"openid email profile offline_access"},
 		"state":                      {r.state},
 	}
-	u := authBaseURL + "/oauth/authorize?" + params.Encode()
+	u := authOriginURL + "/oauth/authorize?" + params.Encode()
 
-	resp, err := doRequest(ctx, r.client, http.MethodGet, u, nil, nil, "")
+	landingURL, err := r.client.GetFinalURL(ctx, u, nil)
 	if err != nil {
 		return "", fmt.Errorf("request codex oauth authorize: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("codex oauth authorize status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-	landingURL := resp.Request.URL.String()
 	if !isExpectedCodexOAuthLandingURL(landingURL) {
 		slog.Warn("codex oauth authorize landed on unexpected url, continuing", "email", r.email, "landing_url", landingURL)
 	}
@@ -107,11 +101,11 @@ func (r *registrationFlow) initCodexOAuth(ctx context.Context) (string, error) {
 		if err := r.primeLoginStep(ctx); err != nil {
 			return "", fmt.Errorf("prime login after oauth authorize: %w", err)
 		}
-		landingURL = authBaseURL + "/log-in"
+		landingURL = authOriginURL + "/log-in"
 	}
 
-	authURL, _ := url.Parse(authBaseURL)
-	r.oaiDID = strings.TrimSpace(cookieValue(r.client, authURL, "oai-did"))
+	authURL, _ := url.Parse(authOriginURL)
+	r.oaiDID = cookieValue(r.client, authURL, "oai-did")
 	if r.oaiDID == "" {
 		slog.Warn("oai-did cookie missing after oauth authorize, opening login page once", "email", r.email, "landing_url", landingURL)
 		if err := r.primeLoginStep(ctx); err != nil {
@@ -149,32 +143,22 @@ func (r *registrationFlow) submitEmailForCodexOnce(ctx context.Context) (authPag
 	var body codexLoginContinueRequest
 	body.Username.Kind = "email"
 	body.Username.Value = r.email
-	bodyJSON, err := json.Marshal(body)
-	if err != nil {
-		return "", fmt.Errorf("encode authorize continue request body: %w", err)
-	}
 	headers := map[string]string{
 		"Accept":                "application/json",
-		"Content-Type":          "application/json",
-		"Origin":                authBaseURL,
-		"Referer":               authBaseURL + "/log-in",
+		"Origin":                authOriginURL,
+		"Referer":               authOriginURL + "/log-in",
 		"openai-sentinel-token": sentinelToken,
 	}
-	resp, err := doJSONRequest(ctx, r.client, http.MethodPost, authBaseURL+"/api/accounts/authorize/continue", headers, bodyJSON)
+	var parsed authPageResponse
+	err = r.client.PostJSON(ctx, authOriginURL+"/api/accounts/authorize/continue", headers, body, &parsed)
 	if err != nil {
+		var statusErr responseError
+		if errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusBadRequest && strings.Contains(statusErr.Body, "invalid_auth_step") {
+			return "", fmt.Errorf("post authorize continue: %w: %w", err, errInvalidAuthStep)
+		}
 		return "", fmt.Errorf("post authorize continue: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
-		msg := strings.TrimSpace(string(raw))
-		if resp.StatusCode == http.StatusBadRequest && strings.Contains(msg, "invalid_auth_step") {
-			return "", fmt.Errorf("authorize continue status %d: %s: %w", resp.StatusCode, msg, errInvalidAuthStep)
-		}
-		return "", fmt.Errorf("authorize continue status %d: %s", resp.StatusCode, msg)
-	}
-
-	pageType, err := parseAuthPageType(resp.Body)
+	pageType, err := authPageTypeFromResponse(parsed)
 	if err != nil {
 		return "", fmt.Errorf("decode authorize continue response: %w", err)
 	}
@@ -186,15 +170,10 @@ var (
 	errLoginChallengeMissing = errors.New("login challenge missing in session")
 )
 
-func parseAuthPageType(reader io.Reader) (authPageType, error) {
-	var parsed authPageResponse
-	if err := json.NewDecoder(reader).Decode(&parsed); err != nil {
-		return "", err
-	}
-
-	pageType := authPageType(strings.TrimSpace(string(parsed.Page.Type)))
+func authPageTypeFromResponse(parsed authPageResponse) (authPageType, error) {
+	pageType := parsed.Page.Type
 	if pageType == "" {
-		return "", errors.New("response page.type is empty")
+		return "", errors.New("auth page type is empty")
 	}
 	return pageType, nil
 }
@@ -206,32 +185,22 @@ func (r *registrationFlow) verifyPasswordForCodex(ctx context.Context) (authPage
 	}
 
 	body := map[string]string{"password": r.password}
-	bodyJSON, err := json.Marshal(body)
-	if err != nil {
-		return "", fmt.Errorf("encode password verify request body: %w", err)
-	}
 	headers := map[string]string{
 		"Accept":                "application/json",
-		"Content-Type":          "application/json",
-		"Origin":                authBaseURL,
-		"Referer":               authBaseURL + "/log-in/password",
+		"Origin":                authOriginURL,
+		"Referer":               authOriginURL + "/log-in/password",
 		"openai-sentinel-token": sentinelToken,
 	}
-	resp, err := doJSONRequest(ctx, r.client, http.MethodPost, authBaseURL+"/api/accounts/password/verify", headers, bodyJSON)
+	var parsed authPageResponse
+	err = r.client.PostJSON(ctx, authOriginURL+"/api/accounts/password/verify", headers, body, &parsed)
 	if err != nil {
+		var statusErr responseError
+		if errors.As(err, &statusErr) && strings.Contains(statusErr.Body, "login_challenge_not_found_in_session") {
+			return "", fmt.Errorf("post password verify: %w: %w", err, errLoginChallengeMissing)
+		}
 		return "", fmt.Errorf("post password verify: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
-		msg := strings.TrimSpace(string(raw))
-		if strings.Contains(msg, "login_challenge_not_found_in_session") {
-			return "", fmt.Errorf("password verify status %d: %s: %w", resp.StatusCode, msg, errLoginChallengeMissing)
-		}
-		return "", fmt.Errorf("password verify status %d: %s", resp.StatusCode, msg)
-	}
-
-	pageType, err := parseAuthPageType(resp.Body)
+	pageType, err := authPageTypeFromResponse(parsed)
 	if err != nil {
 		return "", fmt.Errorf("decode password verify response: %w", err)
 	}
@@ -239,28 +208,25 @@ func (r *registrationFlow) verifyPasswordForCodex(ctx context.Context) (authPage
 }
 
 func (r *registrationFlow) primeLoginStep(ctx context.Context) error {
-	resp, err := doRequest(ctx, r.client, http.MethodGet, authBaseURL+"/log-in", nil, nil, "")
-	if err != nil {
+	if err := r.client.GetOK(ctx, authOriginURL+"/log-in", nil); err != nil {
 		return fmt.Errorf("open log-in page: %w", err)
 	}
-	resp.Body.Close()
 
-	authURL, _ := url.Parse(authBaseURL)
-	if did := strings.TrimSpace(cookieValue(r.client, authURL, "oai-did")); did != "" {
+	authURL, _ := url.Parse(authOriginURL)
+	if did := cookieValue(r.client, authURL, "oai-did"); did != "" {
 		r.oaiDID = did
 	}
-	if strings.TrimSpace(r.oaiDID) == "" {
+	if r.oaiDID == "" {
 		return errors.New("oai-did cookie missing after log-in page")
 	}
 	return nil
 }
 
 func (r *registrationFlow) buildSentinelTokenHeader(ctx context.Context, action string) (string, error) {
-	action = strings.TrimSpace(action)
 	if action == "" {
 		return "", errors.New("sentinel action is empty")
 	}
-	if strings.TrimSpace(r.oaiDID) == "" {
+	if r.oaiDID == "" {
 		return "", errors.New("oai-did is empty")
 	}
 
@@ -278,31 +244,22 @@ func (r *registrationFlow) buildSentinelTokenHeader(ctx context.Context, action 
 		"origin":  "https://sentinel.openai.com",
 		"referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
 	}
-	resp, err := doRequest(
-		ctx,
-		r.client,
-		http.MethodPost,
-		"https://sentinel.openai.com/backend-api/sentinel/req",
-		headers,
-		bytes.NewReader(reqBody),
-		"text/plain;charset=UTF-8",
-	)
+	resp, err := r.client.Post(ctx, "https://sentinel.openai.com/backend-api/sentinel/req", headers, bytes.NewReader(reqBody), "text/plain;charset=UTF-8")
 	if err != nil {
 		return "", fmt.Errorf("request sentinel token: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("sentinel status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	if err := expectStatus(resp, http.StatusOK); err != nil {
+		return "", fmt.Errorf("request sentinel token: %w", err)
 	}
 
 	var payload struct {
 		Token string `json:"token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := decodeJSON(resp.Body, &payload); err != nil {
 		return "", fmt.Errorf("decode sentinel response: %w", err)
 	}
-	if strings.TrimSpace(payload.Token) == "" {
+	if payload.Token == "" {
 		return "", errors.New("sentinel response token is empty")
 	}
 
@@ -321,7 +278,7 @@ func (r *registrationFlow) buildSentinelTokenHeader(ctx context.Context, action 
 }
 
 func (r *registrationFlow) loadWorkspaces() ([]workspace, error) {
-	authURL, _ := url.Parse(authBaseURL)
+	authURL, _ := url.Parse(authOriginURL)
 	authCookie := cookieValue(r.client, authURL, "oai-client-auth-session")
 	if authCookie == "" {
 		return nil, errors.New("oai-client-auth-session cookie missing")
@@ -348,39 +305,25 @@ func (r *registrationFlow) loadWorkspaces() ([]workspace, error) {
 
 func (r *registrationFlow) selectWorkspace(ctx context.Context, workspaceID string) (string, error) {
 	body := map[string]string{"workspace_id": workspaceID}
-	bodyJSON, err := json.Marshal(body)
-	if err != nil {
-		return "", fmt.Errorf("encode workspace select request body: %w", err)
-	}
 	headers := map[string]string{
-		"Content-Type": "application/json",
-		"Origin":       authBaseURL,
-		"Referer":      authBaseURL + "/sign-in-with-chatgpt/codex/consent",
+		"Origin":  authOriginURL,
+		"Referer": authOriginURL + "/sign-in-with-chatgpt/codex/consent",
 	}
-	resp, err := doJSONRequest(ctx, r.client, http.MethodPost, authBaseURL+"/api/accounts/workspace/select", headers, bodyJSON)
-	if err != nil {
-		return "", fmt.Errorf("post workspace select: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("workspace select status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-
 	var parsed struct {
 		ContinueURL string `json:"continue_url"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return "", fmt.Errorf("decode workspace select response: %w", err)
+	err := r.client.PostJSON(ctx, authOriginURL+"/api/accounts/workspace/select", headers, body, &parsed)
+	if err != nil {
+		return "", fmt.Errorf("post workspace select: %w", err)
 	}
 	if parsed.ContinueURL == "" {
-		return "", errors.New("continue_url missing")
+		return "", errors.New("continue url is empty")
 	}
 	return parsed.ContinueURL, nil
 }
 
 func (r *registrationFlow) completeOAuth(ctx context.Context, continueURL string) (string, error) {
-	currentURL := strings.TrimSpace(continueURL)
+	currentURL := continueURL
 	if currentURL == "" {
 		return "", errors.New("continue url is empty")
 	}
@@ -389,7 +332,7 @@ func (r *registrationFlow) completeOAuth(ctx context.Context, continueURL string
 	}
 
 	for step := range defaultOAuthFollowRedirectMaxSteps {
-		resp, err := doRequest(ctx, r.noRedirectClient, http.MethodGet, currentURL, nil, nil, "")
+		resp, err := r.client.GetNoRedirect(ctx, currentURL, nil)
 		if err != nil {
 			return "", fmt.Errorf("request oauth follow url: %w", err)
 		}
@@ -449,25 +392,15 @@ func (r *registrationFlow) exchangeToken(ctx context.Context, code string) (Auth
 		"grant_type":    {"authorization_code"},
 		"redirect_uri":  {codexRedirectURI},
 	}
-	headers := map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Origin": authBaseURL}
-	resp, err := doRequest(ctx, r.client, http.MethodPost, authBaseURL+"/oauth/token", headers, strings.NewReader(form.Encode()), "application/x-www-form-urlencoded")
-	if err != nil {
-		return AuthTokens{}, fmt.Errorf("post oauth token: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
-		return AuthTokens{}, fmt.Errorf("oauth token status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-
+	headers := map[string]string{"Origin": authOriginURL}
 	var token struct {
 		IDToken      string `json:"id_token"`
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
-		return AuthTokens{}, fmt.Errorf("decode oauth token response: %w", err)
+	err := r.client.PostForm(ctx, authOriginURL+"/oauth/token", headers, form, &token)
+	if err != nil {
+		return AuthTokens{}, fmt.Errorf("post oauth token: %w", err)
 	}
 	if token.AccessToken == "" || token.RefreshToken == "" || token.IDToken == "" {
 		return AuthTokens{}, errors.New("oauth token response missing required fields")
@@ -475,11 +408,13 @@ func (r *registrationFlow) exchangeToken(ctx context.Context, code string) (Auth
 	return AuthTokens{IDToken: token.IDToken, AccessToken: token.AccessToken, RefreshToken: token.RefreshToken}, nil
 }
 
-func (r *registrationFlow) saveCredentialFile(result RegisterResult) (string, error) {
+func (r *registrationFlow) savePendingCredentialFile(result RegisterResult) (string, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	payload := credentialFile{
 		AuthMode:    "chatgpt",
 		LastRefresh: now,
+		CheckoutURL: result.CheckoutURL,
+		CreatedAt:   now,
 		Tokens: credentialJWT{
 			IDToken:      result.Tokens.IDToken,
 			AccessToken:  result.Tokens.AccessToken,
@@ -488,17 +423,46 @@ func (r *registrationFlow) saveCredentialFile(result RegisterResult) (string, er
 		},
 	}
 
-	if err := os.MkdirAll(r.cfg.DataDir, 0o755); err != nil {
-		return "", fmt.Errorf("create data dir: %w", err)
+	path := filepath.Join(r.cfg.DataDir, PendingDirName)
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return "", fmt.Errorf("create pending data dir: %w", err)
 	}
 
-	path := filepath.Join(r.cfg.DataDir, result.Email+".json")
+	filePath := filepath.Join(path, result.Email+".json")
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode credential json: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	data = append(data, '\n')
+	if err := writePendingCredentialFile(filePath, data); err != nil {
 		return "", fmt.Errorf("write credential file: %w", err)
 	}
-	return path, nil
+	return filePath, nil
+}
+
+func writePendingCredentialFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".pending-credential-*")
+	if err != nil {
+		return fmt.Errorf("create temp credential file: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("write temp credential file: %w", err)
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("chmod temp credential file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp credential file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename temp credential file: %w", err)
+	}
+	return nil
 }

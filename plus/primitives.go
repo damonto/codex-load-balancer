@@ -1,4 +1,4 @@
-package account
+package plus
 
 import (
 	cryptoRand "crypto/rand"
@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	http "github.com/bogdanfinn/fhttp"
-	tls_client "github.com/bogdanfinn/tls-client"
 )
 
 func generateName() string {
@@ -109,8 +108,8 @@ func extractOTP(text string) string {
 	return matches[1]
 }
 
-func cookieValue(client tls_client.HttpClient, u *url.URL, name string) string {
-	for _, c := range client.GetCookies(u) {
+func cookieValue(client *client, u *url.URL, name string) string {
+	for _, c := range client.raw.GetCookies(u) {
 		if c.Name == name {
 			return c.Value
 		}
@@ -174,7 +173,7 @@ func extractOAuthCodeFromBody(body string) string {
 	for _, item := range matches {
 		candidate := html.UnescapeString(strings.TrimSpace(item))
 		if strings.HasPrefix(candidate, "/") {
-			candidate = codexRedirectBaseURL + candidate
+			candidate = codexRedirectURL + candidate
 		}
 		if code := extractOAuthCode(candidate); code != "" {
 			return code
@@ -188,10 +187,10 @@ func buildOAuthCallbackPattern(redirectURI string) *regexp.Regexp {
 	host := "localhost:1455"
 	parsed, err := url.Parse(strings.TrimSpace(redirectURI))
 	if err == nil {
-		if strings.TrimSpace(parsed.Path) != "" {
+		if parsed.Path != "" {
 			basePath = parsed.Path
 		}
-		if strings.TrimSpace(parsed.Host) != "" {
+		if parsed.Host != "" {
 			host = parsed.Host
 		}
 	}
@@ -199,9 +198,9 @@ func buildOAuthCallbackPattern(redirectURI string) *regexp.Regexp {
 	return regexp.MustCompile(`(?:https?://` + regexp.QuoteMeta(host) + `)?` + regexp.QuoteMeta(basePath) + `\?[^"'<>\s]+`)
 }
 
-func buildRedirectBaseURL(redirectURI string) string {
+func buildRedirectURL(redirectURI string) string {
 	parsed, err := url.Parse(strings.TrimSpace(redirectURI))
-	if err == nil && strings.TrimSpace(parsed.Scheme) != "" && strings.TrimSpace(parsed.Host) != "" {
+	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
 		return parsed.Scheme + "://" + parsed.Host
 	}
 	return "http://localhost:1455"

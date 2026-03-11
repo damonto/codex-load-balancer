@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/damonto/codex-load-balancer/plus"
 )
 
 func TestValidAccountCount(t *testing.T) {
@@ -76,5 +80,52 @@ func TestTopUpMissingAccountsNoop(t *testing.T) {
 	store := NewTokenStore()
 	if err := topUpMissingAccounts(context.Background(), store, t.TempDir(), 0, topUpOptions{}); err != nil {
 		t.Fatalf("topUpMissingAccounts() error = %v", err)
+	}
+}
+
+func TestTopUpAccountsSerializesConcurrentRuns(t *testing.T) {
+	dataDir := t.TempDir()
+	var registerCalls atomic.Int32
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+
+	originalRegister := registerCodexCredential
+	t.Cleanup(func() { registerCodexCredential = originalRegister })
+	registerCodexCredential = func(ctx context.Context, opts plus.RegisterOptions) (plus.RegisterResult, error) {
+		registerCalls.Add(1)
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		pendingDir := pendingPurchaseDir(opts.DataDir)
+		if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+			return plus.RegisterResult{}, err
+		}
+		filePath := filepath.Join(pendingDir, "pending.json")
+		if err := os.WriteFile(filePath, []byte(`{"tokens":{"access_token":"pending-token","account_id":"account-1"}}`), 0o644); err != nil {
+			return plus.RegisterResult{}, err
+		}
+		return plus.RegisterResult{Email: "demo@example.com", FilePath: filePath}, nil
+	}
+
+	store := NewTokenStore()
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- topUpAccounts(context.Background(), store, dataDir, topUpOptions{TargetCount: 1, RegisterWorkers: 1})
+	}()
+	<-started
+	go func() {
+		errCh <- topUpAccounts(context.Background(), store, dataDir, topUpOptions{TargetCount: 1, RegisterWorkers: 1})
+	}()
+	close(release)
+
+	for range 2 {
+		if err := <-errCh; err != nil {
+			t.Fatalf("topUpAccounts() error = %v", err)
+		}
+	}
+	if got := registerCalls.Load(); got != 1 {
+		t.Fatalf("register calls = %d, want %d", got, 1)
 	}
 }

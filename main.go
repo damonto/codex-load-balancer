@@ -103,6 +103,9 @@ func bootstrapRuntime(cfg appConfig) (*appRuntime, error) {
 	if err := loadTokensFromDir(store, cfg.dataDir); err != nil {
 		return nil, fmt.Errorf("initial token load: %w", err)
 	}
+	if err := ensurePendingPurchaseDir(cfg.dataDir); err != nil {
+		return nil, err
+	}
 
 	usageDBPath := filepath.Join(cfg.dataDir, "usage.db")
 	usageDB, err := openUsageDB(usageDBPath)
@@ -127,30 +130,35 @@ func closeRuntime(rt *appRuntime) {
 func startBackgroundWorkers(ctx context.Context, cfg appConfig, store *TokenStore) {
 	go runTokenWatcher(ctx, store, cfg.dataDir)
 	topUpOpts := topUpOptions{
-		RegisterWorkers: cfg.registerWorkers,
-		RegisterTimeout: cfg.registerTimeout,
-		ProxyPool:       cfg.proxyPool,
+		TargetCount:      cfg.minTrackedAccounts,
+		RegisterWorkers:  cfg.registerWorkers,
+		RegisterTimeout:  cfg.registerTimeout,
+		ProxyPool:        cfg.proxyPool,
+		TelegramBotToken: cfg.telegramBotToken,
+		TelegramChatID:   cfg.telegramChatID,
 	}
-	go runUsageSyncer(ctx, store, cfg.dataDir, backendEndpoint(defaultBackendAPIBase, "/wham/usage"), usageSyncOptions{
+	usageURL := backendEndpoint(defaultBackendAPIURL, "/wham/usage")
+	go runUsageSyncer(ctx, store, cfg.dataDir, usageURL, usageSyncOptions{
 		Interval:    cfg.syncInterval,
 		Concurrency: cfg.syncConcurrency,
 	}, topUpOpts)
-	if cfg.minValidAccounts == 0 {
+	go runPendingPurchaseSyncer(ctx, store, cfg.dataDir, usageURL, usageSyncOptions{
+		Interval:    cfg.syncInterval,
+		Concurrency: cfg.syncConcurrency,
+	})
+	if cfg.minTrackedAccounts == 0 {
 		return
 	}
 
 	go func() {
-		opts := topUpOpts
-		opts.TargetCount = cfg.minValidAccounts
-		err := topUpAccounts(ctx, store, cfg.dataDir, opts)
-		if err != nil && ctx.Err() == nil {
+		if err := topUpAccounts(ctx, store, cfg.dataDir, topUpOpts); err != nil && ctx.Err() == nil {
 			slog.Warn("startup account top-up", "err", err)
 		}
 	}()
 }
 
 func newHTTPServer(cfg appConfig, rt *appRuntime) (*http.Server, error) {
-	upstreamURL, err := url.Parse(backendEndpoint(defaultBackendAPIBase, "/codex"))
+	upstreamURL, err := url.Parse(backendEndpoint(defaultBackendAPIURL, "/codex"))
 	if err != nil {
 		return nil, fmt.Errorf("parse upstream URL: %w", err)
 	}

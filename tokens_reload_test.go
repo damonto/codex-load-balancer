@@ -200,6 +200,75 @@ func TestTokenStoreRemoveTokenAndRefreshLockConcurrent(t *testing.T) {
 	}
 }
 
+func TestTokenStoreUpsertTokenPreservesUsageMetadataOnReload(t *testing.T) {
+	tests := []struct {
+		name          string
+		reloadToken   TokenState
+		wantAccountID string
+		wantEmail     string
+		wantPlanType  string
+	}{
+		{
+			name: "blank reload metadata keeps usage values",
+			reloadToken: TokenState{
+				ID:           "active.json",
+				Path:         "/tmp/active.json",
+				Token:        "new-token",
+				RefreshToken: "new-refresh",
+				LastRefresh:  time.Now().UTC(),
+			},
+			wantAccountID: "account-usage",
+			wantEmail:     "usage@example.com",
+			wantPlanType:  "plus",
+		},
+		{
+			name: "non blank reload account id still updates",
+			reloadToken: TokenState{
+				ID:           "active.json",
+				Path:         "/tmp/active.json",
+				Token:        "new-token",
+				AccountID:    "account-file",
+				RefreshToken: "new-refresh",
+				LastRefresh:  time.Now().UTC(),
+			},
+			wantAccountID: "account-file",
+			wantEmail:     "usage@example.com",
+			wantPlanType:  "plus",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewTokenStore()
+			store.UpsertToken(TokenState{
+				ID:           "active.json",
+				Path:         "/tmp/active.json",
+				Token:        "old-token",
+				AccountID:    "account-usage",
+				Email:        "usage@example.com",
+				PlanType:     "plus",
+				RefreshToken: "old-refresh",
+			}, time.Now().UTC())
+
+			store.UpsertToken(tt.reloadToken, time.Now().UTC())
+
+			token, ok := store.TokenSnapshot("active.json")
+			if !ok {
+				t.Fatal("token should remain in store")
+			}
+			if token.AccountID != tt.wantAccountID {
+				t.Fatalf("AccountID = %q, want %q", token.AccountID, tt.wantAccountID)
+			}
+			if token.Email != tt.wantEmail {
+				t.Fatalf("Email = %q, want %q", token.Email, tt.wantEmail)
+			}
+			if token.PlanType != tt.wantPlanType {
+				t.Fatalf("PlanType = %q, want %q", token.PlanType, tt.wantPlanType)
+			}
+		})
+	}
+}
+
 func writeAuthFileForTest(t *testing.T, path string, accessToken string) {
 	t.Helper()
 	payload := map[string]any{

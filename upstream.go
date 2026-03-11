@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-const defaultBackendAPIBase = "https://chatgpt.com/backend-api"
+const defaultBackendAPIURL = "https://chatgpt.com/backend-api"
 
 func backendEndpoint(baseURL string, path string) string {
 	base := strings.TrimRight(baseURL, "/")

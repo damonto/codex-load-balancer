@@ -1,4 +1,4 @@
-package account
+package plus
 
 import (
 	"bytes"
@@ -14,14 +14,15 @@ import (
 )
 
 const (
-	emailAPIBaseURL          = "https://mail.wxjerry.top"
+	emailAPIURL              = "https://mail.wxjerry.top"
 	emailAuthToken           = ""
 	defaultEmailLocalPartLen = 12
 )
 
 var (
-	emailHTTPClient = &http.Client{Timeout: 15 * time.Second}
-	emailDomains    = [...]string{}
+	errEmailNotFound = errors.New("no email found for address")
+	emailHTTPClient  = &http.Client{Timeout: 15 * time.Second}
+	emailDomains     = [...]string{}
 )
 
 type emailListResponse struct {
@@ -42,6 +43,12 @@ type emailListRecord struct {
 	Content    string `json:"content"`
 	Text       string `json:"text"`
 	IsDel      int    `json:"isDel"`
+}
+
+type emailCursor struct {
+	EmailID      int
+	CreatedAt    time.Time
+	HasCreatedAt bool
 }
 
 // Generate creates a random email address in the form <random>@example.invalid.
@@ -70,35 +77,80 @@ func Latest(address string) (string, error) {
 
 // LatestWithContext returns the content of the newest email and respects cancellation.
 func LatestWithContext(ctx context.Context, address string) (string, error) {
+	record, err := latestInboxRecordWithContext(ctx, address)
+	if err != nil {
+		return "", err
+	}
+
+	content, err := emailContent(record)
+	if err != nil {
+		return "", err
+	}
+	return content, nil
+}
+
+func latestEmailCursorWithContext(ctx context.Context, address string) (emailCursor, error) {
+	record, err := latestInboxRecordWithContext(ctx, address)
+	if err != nil {
+		if errors.Is(err, errEmailNotFound) {
+			return emailCursor{}, nil
+		}
+		return emailCursor{}, err
+	}
+	return emailCursorFromRecord(record), nil
+}
+
+func latestAfterWithContext(ctx context.Context, address string, after emailCursor) (string, bool, error) {
+	record, err := latestInboxRecordWithContext(ctx, address)
+	if err != nil {
+		if errors.Is(err, errEmailNotFound) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	if !isRecordAfterCursor(record, after) {
+		return "", false, nil
+	}
+
+	content, err := emailContent(record)
+	if err != nil {
+		return "", true, err
+	}
+	return content, true, nil
+}
+
+func latestInboxRecordWithContext(ctx context.Context, address string) (emailListRecord, error) {
 	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf("fetching emails canceled: %w", err)
+		return emailListRecord{}, fmt.Errorf("fetching emails canceled: %w", err)
 	}
 
 	address = strings.TrimSpace(address)
 	if address == "" {
-		return "", errors.New("address is empty")
+		return emailListRecord{}, errors.New("address is empty")
 	}
 
 	resp, err := fetchEmailList(ctx, address)
 	if err != nil {
-		return "", fmt.Errorf("fetching emails: %w", err)
+		return emailListRecord{}, fmt.Errorf("fetching emails: %w", err)
 	}
 
 	if resp.Code != http.StatusOK {
 		msg := strings.TrimSpace(resp.Message)
 		if msg == "" {
-			return "", fmt.Errorf("fetching emails: code %d", resp.Code)
+			return emailListRecord{}, fmt.Errorf("fetching emails: code %d", resp.Code)
 		}
-		return "", fmt.Errorf("fetching emails: code %d: %s", resp.Code, msg)
+		return emailListRecord{}, fmt.Errorf("fetching emails: code %d: %s", resp.Code, msg)
 	}
 
 	records := filterInboxRecords(resp.Data, address)
 	if len(records) == 0 {
-		return "", errors.New("no email found for address")
+		return emailListRecord{}, errEmailNotFound
 	}
 	records = preferOpenAIRecords(records)
+	return pickLatestRecord(records), nil
+}
 
-	record := pickLatestRecord(records)
+func emailContent(record emailListRecord) (string, error) {
 	content := strings.TrimSpace(record.Text)
 	if content == "" {
 		content = strings.TrimSpace(record.Content)
@@ -109,8 +161,34 @@ func LatestWithContext(ctx context.Context, address string) (string, error) {
 	if content == "" {
 		return "", errors.New("latest email content is empty")
 	}
-
 	return content, nil
+}
+
+func emailCursorFromRecord(record emailListRecord) emailCursor {
+	createdAt, ok := parseEmailCreateTime(record.CreateTime)
+	return emailCursor{
+		EmailID:      record.EmailID,
+		CreatedAt:    createdAt,
+		HasCreatedAt: ok,
+	}
+}
+
+func isRecordAfterCursor(record emailListRecord, cursor emailCursor) bool {
+	if cursor.EmailID == 0 && !cursor.HasCreatedAt {
+		return true
+	}
+
+	recordTime, recordHasTime := parseEmailCreateTime(record.CreateTime)
+	if cursor.HasCreatedAt && recordHasTime && !recordTime.Equal(cursor.CreatedAt) {
+		return recordTime.After(cursor.CreatedAt)
+	}
+	if record.EmailID != cursor.EmailID {
+		return record.EmailID > cursor.EmailID
+	}
+	if cursor.HasCreatedAt && recordHasTime {
+		return recordTime.After(cursor.CreatedAt)
+	}
+	return false
 }
 
 func fetchEmailList(ctx context.Context, address string) (emailListResponse, error) {
@@ -119,7 +197,7 @@ func fetchEmailList(ctx context.Context, address string) (emailListResponse, err
 		return emailListResponse{}, fmt.Errorf("encode request body: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, emailAPIBaseURL+"/api/public/emailList", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, emailAPIURL+"/api/public/emailList", bytes.NewReader(body))
 	if err != nil {
 		return emailListResponse{}, fmt.Errorf("create request: %w", err)
 	}
@@ -132,16 +210,16 @@ func fetchEmailList(ctx context.Context, address string) (emailListResponse, err
 	}
 	defer res.Body.Close()
 
-	data, err := io.ReadAll(res.Body)
-	if err != nil {
-		return emailListResponse{}, fmt.Errorf("read response body: %w", err)
-	}
 	if res.StatusCode != http.StatusOK {
-		return emailListResponse{}, fmt.Errorf("http status %d: %s", res.StatusCode, strings.TrimSpace(string(data)))
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			return emailListResponse{}, fmt.Errorf("read response body: %w", err)
+		}
+		return emailListResponse{}, fmt.Errorf("email list status %d: %s", res.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var payload emailListResponse
-	if err := json.Unmarshal(data, &payload); err != nil {
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
 		return emailListResponse{}, fmt.Errorf("decode response JSON: %w", err)
 	}
 	return payload, nil
@@ -174,7 +252,6 @@ func filterInboxRecords(records []emailListRecord, toEmail string) []emailListRe
 		return filtered
 	}
 
-	// Fallback: if upstream data has unexpected type/toEmail fields, keep non-deleted items.
 	for _, rec := range records {
 		if rec.IsDel == 0 {
 			filtered = append(filtered, rec)

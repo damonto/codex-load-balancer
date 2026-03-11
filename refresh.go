@@ -168,14 +168,6 @@ func refreshAccessToken(ctx context.Context, refreshToken string) (string, strin
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", "", refreshTokenError{
-			permanent: false,
-			err:       fmt.Errorf("read refresh response: %w", err),
-		}
-	}
-
 	if resp.StatusCode == http.StatusUnauthorized {
 		return "", "", refreshTokenError{
 			permanent: true,
@@ -183,6 +175,13 @@ func refreshAccessToken(ctx context.Context, refreshToken string) (string, strin
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", "", refreshTokenError{
+				permanent: false,
+				err:       fmt.Errorf("read refresh response: %w", err),
+			}
+		}
 		return "", "", refreshTokenError{
 			permanent: false,
 			err:       fmt.Errorf("refresh request status %d: %s", resp.StatusCode, string(body)),
@@ -190,7 +189,7 @@ func refreshAccessToken(ctx context.Context, refreshToken string) (string, strin
 	}
 
 	var payload refreshResponse
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return "", "", refreshTokenError{
 			permanent: false,
 			err:       fmt.Errorf("decode refresh response: %w", err),
@@ -199,7 +198,7 @@ func refreshAccessToken(ctx context.Context, refreshToken string) (string, strin
 	if payload.AccessToken == "" {
 		return "", "", refreshTokenError{
 			permanent: false,
-			err:       errors.New("refresh response missing access_token"),
+			err:       errors.New("refresh response missing access token"),
 		}
 	}
 	return payload.AccessToken, payload.RefreshToken, nil

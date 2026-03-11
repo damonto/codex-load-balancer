@@ -1,4 +1,4 @@
-package account
+package plus
 
 import (
 	"context"
@@ -13,9 +13,11 @@ func (r *registrationFlow) execute(ctx context.Context) (RegisterResult, error) 
 		return RegisterResult{}, err
 	}
 
-	if err := r.completeRegistrationFlow(ctx); err != nil {
+	session, err := r.completeRegistrationFlow(ctx)
+	if err != nil {
 		return RegisterResult{}, err
 	}
+	result.Session = session
 
 	token, accountID, err := r.completeCodexLoginFlow(ctx)
 	if err != nil {
@@ -25,12 +27,22 @@ func (r *registrationFlow) execute(ctx context.Context) (RegisterResult, error) 
 	result.Tokens = token
 	slog.Info("codex oauth completed", "email", r.email, "account_id", accountID)
 
-	path, err := r.saveCredentialFile(result)
+	purchase := NewPurchase(r.client, session, r.cfg.TelegramBotToken, r.cfg.TelegramChatID)
+	checkoutURL, err := purchase.CheckoutURL(ctx)
 	if err != nil {
-		return RegisterResult{}, fmt.Errorf("save credential file: %w", err)
+		return RegisterResult{}, err
+	}
+	result.CheckoutURL = checkoutURL
+
+	path, err := r.savePendingCredentialFile(result)
+	if err != nil {
+		return RegisterResult{}, fmt.Errorf("save pending credential file: %w", err)
 	}
 	result.FilePath = path
-	slog.Info("credential file saved", "email", r.email, "file", path)
+	slog.Info("pending credential file saved", "email", r.email, "file", path)
+	if err := purchase.sendCheckoutURL(ctx, checkoutURL); err != nil {
+		slog.Warn("send checkout url", "email", r.email, "file", path, "err", err)
+	}
 
 	return result, nil
 }
@@ -46,49 +58,51 @@ func (r *registrationFlow) prepareAccountProfile(ctx context.Context) (RegisterR
 	r.email = email
 	slog.Info("account registration started", "email", r.email, "proxy_host", proxyHostOnly(r.cfg.Proxy))
 
-	r.password = r.cfg.Password
-	if r.password == "" {
-		r.password = generatePassword()
-	}
-
+	r.password = generatePassword()
 	r.name = generateName()
 	r.birthdate = generateBirthdate()
-	slog.Info("account profile generated", "email", r.email, "name", r.name, "birthdate", r.birthdate)
+	slog.Info("account profile generated", "email", r.email)
 	return result, nil
 }
 
-func (r *registrationFlow) completeRegistrationFlow(ctx context.Context) error {
+func (r *registrationFlow) completeRegistrationFlow(ctx context.Context) (ChatGPTSession, error) {
 	if err := r.initChatGPTSignup(ctx); err != nil {
-		return fmt.Errorf("init chatgpt signup flow: %w", err)
+		return ChatGPTSession{}, fmt.Errorf("init chatgpt signup flow: %w", err)
 	}
 	slog.Info("chatgpt signup session initialized", "email", r.email)
 
 	if err := r.registerPassword(ctx); err != nil {
-		return fmt.Errorf("register account password: %w", err)
+		return ChatGPTSession{}, fmt.Errorf("register account password: %w", err)
 	}
 	slog.Info("signup password submitted", "email", r.email)
 
+	otpCursor, err := latestEmailCursorWithContext(ctx, r.email)
+	if err != nil {
+		return ChatGPTSession{}, fmt.Errorf("load registration otp cursor: %w", err)
+	}
+
 	if err := r.sendVerificationEmailRegistered(ctx); err != nil {
-		return fmt.Errorf("send registration otp email: %w", err)
+		return ChatGPTSession{}, fmt.Errorf("send registration otp email: %w", err)
 	}
 	slog.Info("otp email requested", "email", r.email)
 
-	otp, err := r.waitOTP(ctx)
+	otp, err := r.waitOTP(ctx, otpCursor)
 	if err != nil {
-		return fmt.Errorf("read registration otp: %w", err)
+		return ChatGPTSession{}, fmt.Errorf("read registration otp: %w", err)
 	}
 	slog.Info("otp received", "email", r.email, "code_len", len(otp))
 
 	if err := r.validateOTP(ctx, otp); err != nil {
-		return fmt.Errorf("validate registration otp: %w", err)
+		return ChatGPTSession{}, fmt.Errorf("validate registration otp: %w", err)
 	}
 	slog.Info("otp validated", "email", r.email)
 
-	if err := r.createAccount(ctx); err != nil {
-		return fmt.Errorf("create account profile: %w", err)
+	session, err := r.createAccount(ctx)
+	if err != nil {
+		return ChatGPTSession{}, fmt.Errorf("create account profile: %w", err)
 	}
-	slog.Info("account created", "email", r.email)
-	return nil
+	slog.Info("account created", "email", r.email, "user_id", session.User.ID, "account_id", session.Account.ID, "plan_type", session.Account.PlanType)
+	return session, nil
 }
 
 func (r *registrationFlow) completeCodexLoginFlow(ctx context.Context) (AuthTokens, string, error) {
@@ -109,6 +123,11 @@ func (r *registrationFlow) completeCodexLoginFlow(ctx context.Context) (AuthToke
 	}
 	slog.Info("codex oauth authorize page opened", "email", r.email, "landing_url", landingURL)
 
+	otpCursor, err := latestEmailCursorWithContext(ctx, r.email)
+	if err != nil {
+		return AuthTokens{}, "", fmt.Errorf("load codex login otp cursor: %w", err)
+	}
+
 	pageType, err := r.submitEmailForCodex(ctx)
 	if err != nil {
 		return AuthTokens{}, "", fmt.Errorf("submit codex login email: %w", err)
@@ -121,7 +140,7 @@ func (r *registrationFlow) completeCodexLoginFlow(ctx context.Context) (AuthToke
 	}
 
 	if pageType == authPageTypeEmailOTPVerification {
-		otpCode, err := r.waitOTP(ctx)
+		otpCode, err := r.waitOTP(ctx, otpCursor)
 		if err != nil {
 			return AuthTokens{}, "", fmt.Errorf("read codex login otp: %w", err)
 		}

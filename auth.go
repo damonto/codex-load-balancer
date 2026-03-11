@@ -24,7 +24,7 @@ func proxyAuthorized(r *http.Request, apiKey string) bool {
 		return false
 	}
 	scheme, token, ok := strings.Cut(value, " ")
-	if !ok || !strings.EqualFold(strings.TrimSpace(scheme), "Bearer") {
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
 		return false
 	}
 	token = strings.TrimSpace(token)

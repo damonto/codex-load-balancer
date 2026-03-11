@@ -1,9 +1,10 @@
-package account
+package plus
 
 import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestPreferOpenAIRecords(t *testing.T) {
@@ -107,6 +108,54 @@ func TestLatestWithContext(t *testing.T) {
 			_, err := LatestWithContext(tt.ctx, tt.address)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("LatestWithContext() err = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestIsRecordAfterCursor(t *testing.T) {
+	tests := []struct {
+		name   string
+		record emailListRecord
+		cursor emailCursor
+		want   bool
+	}{
+		{
+			name:   "zero cursor accepts first email",
+			record: emailListRecord{EmailID: 10, CreateTime: "2026-03-11 19:00:00"},
+			cursor: emailCursor{},
+			want:   true,
+		},
+		{
+			name:   "newer email id wins when time equal",
+			record: emailListRecord{EmailID: 11, CreateTime: "2026-03-11 19:00:00"},
+			cursor: emailCursor{EmailID: 10, CreatedAt: time.Date(2026, 3, 11, 19, 0, 0, 0, time.UTC), HasCreatedAt: true},
+			want:   true,
+		},
+		{
+			name:   "same email is not newer",
+			record: emailListRecord{EmailID: 10, CreateTime: "2026-03-11 19:00:00"},
+			cursor: emailCursor{EmailID: 10, CreatedAt: time.Date(2026, 3, 11, 19, 0, 0, 0, time.UTC), HasCreatedAt: true},
+			want:   false,
+		},
+		{
+			name:   "older email id is rejected",
+			record: emailListRecord{EmailID: 9, CreateTime: "2026-03-11 19:00:00"},
+			cursor: emailCursor{EmailID: 10},
+			want:   false,
+		},
+		{
+			name:   "newer timestamp wins when ids are odd",
+			record: emailListRecord{EmailID: 8, CreateTime: "2026-03-11 19:00:01"},
+			cursor: emailCursor{EmailID: 10, CreatedAt: time.Date(2026, 3, 11, 19, 0, 0, 0, time.UTC), HasCreatedAt: true},
+			want:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isRecordAfterCursor(tt.record, tt.cursor); got != tt.want {
+				t.Fatalf("isRecordAfterCursor() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
-	"strings"
 	"time"
 )
 
@@ -61,8 +60,8 @@ func accountKeyFromRef(ref TokenRef) string {
 }
 
 func accountKey(accountID string, fallbackID string) string {
-	if value := strings.TrimSpace(accountID); value != "" {
-		return value
+	if accountID != "" {
+		return accountID
 	}
 	return fallbackID
 }

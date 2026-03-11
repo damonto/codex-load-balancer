@@ -5,7 +5,6 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 )
@@ -148,9 +147,15 @@ func (s *TokenStore) UpsertToken(token TokenState, modTime time.Time) (added boo
 	}
 
 	existing.Token = token.Token
-	existing.AccountID = token.AccountID
-	existing.Email = token.Email
-	existing.PlanType = token.PlanType
+	if token.AccountID != "" {
+		existing.AccountID = token.AccountID
+	}
+	if token.Email != "" {
+		existing.Email = token.Email
+	}
+	if token.PlanType != "" {
+		existing.PlanType = token.PlanType
+	}
 	existing.RefreshToken = token.RefreshToken
 	existing.Path = token.Path
 	if !token.LastRefresh.IsZero() {
@@ -191,8 +196,33 @@ func (s *TokenStore) UpdateUsage(id string, fiveHour WindowUsage, weekly WindowU
 	s.mu.Unlock()
 }
 
+type usageAccountMetadata struct {
+	UserID    string
+	AccountID string
+	Email     string
+	PlanType  string
+}
+
+func (s *TokenStore) UpdateUsageAccountMetadata(id string, metadata usageAccountMetadata) {
+	s.mu.Lock()
+	token, ok := s.tokens[id]
+	if ok {
+		if metadata.AccountID != "" {
+			token.AccountID = metadata.AccountID
+		} else if token.AccountID == "" && metadata.UserID != "" {
+			token.AccountID = metadata.UserID
+		}
+		if metadata.Email != "" {
+			token.Email = metadata.Email
+		}
+		if metadata.PlanType != "" {
+			token.PlanType = metadata.PlanType
+		}
+	}
+	s.mu.Unlock()
+}
+
 func (s *TokenStore) UpdateCredentials(id string, accessToken string, refreshToken string) {
-	email, planType := parseJWTClaims(accessToken)
 	s.mu.Lock()
 	token, ok := s.tokens[id]
 	if ok {
@@ -201,12 +231,6 @@ func (s *TokenStore) UpdateCredentials(id string, accessToken string, refreshTok
 		token.LastRefresh = time.Now().UTC()
 		token.Invalid = false
 		token.CooldownUntil = time.Time{}
-		if email != "" {
-			token.Email = email
-		}
-		if planType != "" {
-			token.PlanType = planType
-		}
 	}
 	s.mu.Unlock()
 }
@@ -240,11 +264,10 @@ func (s *TokenStore) PruneMissingTokens(dir string, existingPaths map[string]str
 
 	s.mu.Lock()
 	for id, token := range s.tokens {
-		path := strings.TrimSpace(token.Path)
-		if path == "" {
+		if token.Path == "" {
 			continue
 		}
-		cleanPath := filepath.Clean(path)
+		cleanPath := filepath.Clean(token.Path)
 		if filepath.Dir(cleanPath) != cleanDir {
 			continue
 		}

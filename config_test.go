@@ -39,7 +39,7 @@ data_dir = "/data"
 port = 9090
 
 [top_up]
-min_valid_accounts = 12
+min_tracked_accounts = 12
 register_workers = 3
 register_timeout_seconds = 420
 
@@ -47,19 +47,25 @@ register_timeout_seconds = 420
 usage_sync_interval_seconds = 600
 usage_sync_concurrency = 4
 
+[telegram]
+bot_token = "bot-token"
+chat_id = "123456789"
+
 [account]
 registration_proxy_pool = ["http://proxy-a", "http://proxy-b"]
 `,
 			want: appConfig{
-				apiKey:           "admin",
-				dataDir:          "/data",
-				port:             9090,
-				minValidAccounts: 12,
-				registerWorkers:  3,
-				registerTimeout:  420 * time.Second,
-				proxyPool:        []string{"http://proxy-a", "http://proxy-b"},
-				syncInterval:     600 * time.Second,
-				syncConcurrency:  4,
+				apiKey:             "admin",
+				dataDir:            "/data",
+				port:               9090,
+				minTrackedAccounts: 12,
+				registerWorkers:    3,
+				registerTimeout:    420 * time.Second,
+				proxyPool:          []string{"http://proxy-a", "http://proxy-b"},
+				telegramBotToken:   "bot-token",
+				telegramChatID:     "123456789",
+				syncInterval:       600 * time.Second,
+				syncConcurrency:    4,
 			},
 		},
 		{
@@ -83,7 +89,7 @@ data_dir = "/tmp/data"
 port = 0
 
 [top_up]
-min_valid_accounts = -1
+min_tracked_accounts = -1
 register_workers = 0
 register_timeout_seconds = 0
 
@@ -112,8 +118,22 @@ data_dir = "/tmp/data"
 
 [account]
 registration_proxy_pool = ["  ", ""]
-`,
+			`,
 			wantErr: "account.registration_proxy_pool is empty",
+		},
+		{
+			name: "telegram config must be paired",
+			body: `
+api_key = "k"
+data_dir = "/tmp/data"
+
+[telegram]
+bot_token = "bot-token"
+
+[account]
+registration_proxy_pool = ["http://proxy-default"]
+			`,
+			wantErr: "telegram.bot_token and telegram.chat_id must be set together",
 		},
 	}
 
@@ -149,15 +169,15 @@ registration_proxy_pool = ["  ", ""]
 
 func defaultAppConfigForTest(apiKey string, dataDir string, proxyPool []string) appConfig {
 	return appConfig{
-		apiKey:           apiKey,
-		dataDir:          dataDir,
-		port:             defaultPort,
-		minValidAccounts: 0,
-		registerWorkers:  defaultRegisterWorkers,
-		registerTimeout:  defaultRegisterTimeout,
-		proxyPool:        proxyPool,
-		syncInterval:     defaultUsageSyncInterval,
-		syncConcurrency:  defaultUsageSyncConcurrency,
+		apiKey:             apiKey,
+		dataDir:            dataDir,
+		port:               defaultPort,
+		minTrackedAccounts: 0,
+		registerWorkers:    defaultRegisterWorkers,
+		registerTimeout:    defaultRegisterTimeout,
+		proxyPool:          proxyPool,
+		syncInterval:       defaultUsageSyncInterval,
+		syncConcurrency:    defaultUsageSyncConcurrency,
 	}
 }
 
