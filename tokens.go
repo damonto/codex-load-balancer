@@ -57,7 +57,6 @@ func loadTokensFromDir(store *TokenStore, dir string) error {
 			slog.Warn("token file parse", "path", path, "err", err)
 			continue
 		}
-
 		state := TokenState{
 			ID:           entry.Name(),
 			Path:         path,

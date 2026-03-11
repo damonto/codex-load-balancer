@@ -259,6 +259,9 @@ func (s *Server) activeAccountTokens() map[string][]string {
 	active := make(map[string][]string)
 	for _, ref := range refs {
 		key := accountKeyFromRef(ref)
+		if key == "" {
+			continue
+		}
 		active[key] = append(active[key], ref.ID)
 	}
 	for key, tokenIDs := range active {

@@ -132,7 +132,7 @@ func TestTopUpAccountsCountsPendingPurchases(t *testing.T) {
 			if err := os.MkdirAll(pendingDir, 0o755); err != nil {
 				t.Fatalf("create pending dir: %v", err)
 			}
-			if err := os.WriteFile(filepath.Join(pendingDir, "pending.json"), []byte(`{"tokens":{"access_token":"x"}}`), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(pendingDir, "pending.json"), []byte(`{"tokens":{"access_token":"x","account_id":"account-pending"}}`), 0o644); err != nil {
 				t.Fatalf("write pending file: %v", err)
 			}
 

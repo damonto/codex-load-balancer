@@ -37,8 +37,12 @@ func (s *Server) recordTokenUsage(token TokenState, path string, statusCode int,
 	if s == nil || s.usageSink == nil {
 		return
 	}
+	accountKey := accountKeyFromToken(token)
+	if accountKey == "" {
+		return
+	}
 	s.usageSink.Record(UsageRecord{
-		AccountKey:      accountKeyFromToken(token),
+		AccountKey:      accountKey,
 		TokenID:         token.ID,
 		Path:            path,
 		StatusCode:      statusCode,
@@ -52,18 +56,15 @@ func (s *Server) recordTokenUsage(token TokenState, path string, statusCode int,
 }
 
 func accountKeyFromToken(token TokenState) string {
-	return accountKey(token.AccountID, token.ID)
+	return accountKey(token.AccountID)
 }
 
 func accountKeyFromRef(ref TokenRef) string {
-	return accountKey(ref.AccountID, ref.ID)
+	return accountKey(ref.AccountID)
 }
 
-func accountKey(accountID string, fallbackID string) string {
-	if accountID != "" {
-		return accountID
-	}
-	return fallbackID
+func accountKey(accountID string) string {
+	return accountID
 }
 
 func extractTokenUsageFromBody(body []byte) (TokenUsage, bool) {

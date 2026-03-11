@@ -145,7 +145,7 @@ Endpoints:
 ```
 GET /stats
 GET /stats/overview?q=<search>
-GET /stats/account?account_key=<id>
+GET /stats/account?account_key=<account_id>
 ```
 
 Auth:
@@ -157,6 +157,17 @@ Dashboard data:
 - Overview cards: `today`, `recent_7_days`, `recent_30_days`, `total` with `input_tokens`, `cached_tokens`, `output_tokens`, `reasoning_tokens`.
 - Account table: `email`, `plan_type`, totals, and 5-hour / weekly quota usage from usage sync (`/backend-api/wham/usage`).
 - Detail view: daily / weekly / monthly token trends.
+
+## Account Key Migration
+
+If old `usage_events.account_key` rows were written as `user_xx`, migrate them to `account_id` with:
+
+```bash
+./migrate_usage_account_keys.sh --db data/usage.db --data-dir data
+./migrate_usage_account_keys.sh --apply --db data/usage.db --data-dir data
+```
+
+The script reads only `.tokens.account_id` from token JSON files. It does not parse JWTs.
 
 ## Logs
 

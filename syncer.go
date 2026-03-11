@@ -123,7 +123,6 @@ func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, u
 	}
 	store.UpdateUsage(ref.ID, snapshot.FiveHour, snapshot.Weekly, time.Now())
 	store.UpdateUsageAccountMetadata(ref.ID, usageAccountMetadata{
-		UserID:    snapshot.UserID,
 		AccountID: snapshot.AccountID,
 		Email:     snapshot.Email,
 		PlanType:  snapshot.PlanType,

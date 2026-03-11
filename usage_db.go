@@ -427,7 +427,7 @@ WHERE account_key = ?
 GROUP BY bucket
 ORDER BY bucket DESC
 LIMIT ?
-`, format, accountKey, limit)
+	`, format, accountKey, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query trend: %w", err)
 	}

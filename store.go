@@ -197,7 +197,6 @@ func (s *TokenStore) UpdateUsage(id string, fiveHour WindowUsage, weekly WindowU
 }
 
 type usageAccountMetadata struct {
-	UserID    string
 	AccountID string
 	Email     string
 	PlanType  string
@@ -209,8 +208,6 @@ func (s *TokenStore) UpdateUsageAccountMetadata(id string, metadata usageAccount
 	if ok {
 		if metadata.AccountID != "" {
 			token.AccountID = metadata.AccountID
-		} else if token.AccountID == "" && metadata.UserID != "" {
-			token.AccountID = metadata.UserID
 		}
 		if metadata.Email != "" {
 			token.Email = metadata.Email
@@ -461,7 +458,11 @@ func (s *TokenStore) ValidAccountCount() int {
 		if t.Invalid {
 			continue
 		}
-		seen[accountKeyFromToken(*t)] = struct{}{}
+		key := accountKeyFromToken(*t)
+		if key == "" {
+			continue
+		}
+		seen[key] = struct{}{}
 	}
 	return len(seen)
 }
@@ -474,6 +475,9 @@ func (s *TokenStore) AccountInfos() map[string]AccountInfo {
 			continue
 		}
 		key := accountKeyFromToken(*token)
+		if key == "" {
+			continue
+		}
 		if _, ok := result[key]; !ok {
 			result[key] = AccountInfo{Email: token.Email, PlanType: token.PlanType}
 		}
@@ -552,6 +556,9 @@ func (s *TokenStore) AccountQuotaSnapshots() map[string]AccountQuotaSnapshot {
 		}
 
 		accountKey := accountKeyFromToken(*token)
+		if accountKey == "" {
+			continue
+		}
 		pair, ok := aggregates[accountKey]
 		if !ok {
 			pair = &quotaPair{}

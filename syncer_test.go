@@ -62,7 +62,7 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 			wantPlanType:     "Legacy",
 		},
 		{
-			name:             "user id becomes fallback account id",
+			name:             "user id does not overwrite account id",
 			initialAccountID: "",
 			initialEmail:     "legacy@example.com",
 			initialPlanType:  "Legacy",
@@ -70,7 +70,7 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 			usageAccountID:   "",
 			usageEmail:       "",
 			usagePlanType:    "",
-			wantAccountID:    "user-fallback",
+			wantAccountID:    "",
 			wantEmail:        "legacy@example.com",
 			wantPlanType:     "Legacy",
 		},

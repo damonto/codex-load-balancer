@@ -54,7 +54,7 @@ func countPendingPurchases(dataDir string) (int, error) {
 			if err != nil {
 				continue
 			}
-			countedKey := accountKey(accountID, entry.Name())
+			countedKey := accountKey(accountID)
 			if countedKey == "" {
 				continue
 			}
@@ -181,7 +181,6 @@ func syncOnePendingPurchase(
 	previous, _ := pendingStore.TokenSnapshot(ref.ID)
 	pendingStore.UpdateUsage(ref.ID, snapshot.FiveHour, snapshot.Weekly, now)
 	pendingStore.UpdateUsageAccountMetadata(ref.ID, usageAccountMetadata{
-		UserID:    snapshot.UserID,
 		AccountID: snapshot.AccountID,
 		Email:     snapshot.Email,
 		PlanType:  snapshot.PlanType,
