@@ -121,7 +121,7 @@ func (p *Purchase) sendCheckoutURL(ctx context.Context, checkoutURL string) erro
 
 	body, err := json.Marshal(telegramSendMessageRequest{
 		ChatID: p.telegramChatID,
-		Text:   p.checkoutMessage(checkoutURL),
+		Text:   checkoutURL,
 	})
 	if err != nil {
 		return fmt.Errorf("encode telegram message: %w", err)
@@ -156,8 +156,4 @@ func (p *Purchase) sendCheckoutURL(ctx context.Context, checkoutURL string) erro
 		return fmt.Errorf("telegram sendMessage: %s", payload.Description)
 	}
 	return nil
-}
-
-func (p *Purchase) checkoutMessage(checkoutURL string) string {
-	return checkoutURL
 }
