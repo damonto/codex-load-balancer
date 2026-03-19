@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -98,15 +99,22 @@ func TestTopUpAccountsSerializesConcurrentRuns(t *testing.T) {
 		default:
 		}
 		<-release
-		pendingDir := pendingPurchaseDir(opts.DataDir)
-		if err := os.MkdirAll(pendingDir, 0o755); err != nil {
+		if err := os.MkdirAll(opts.DataDir, 0o755); err != nil {
 			return plus.RegisterResult{}, err
 		}
-		filePath := filepath.Join(pendingDir, "pending.json")
-		if err := os.WriteFile(filePath, []byte(`{"tokens":{"access_token":"pending-token","account_id":"account-1"}}`), 0o644); err != nil {
+		filePath := filepath.Join(opts.DataDir, "demo@example.com.json")
+		if err := writeCredentialFileForTest(filePath, "access-token", "refresh-token", "account-1"); err != nil {
 			return plus.RegisterResult{}, err
 		}
-		return plus.RegisterResult{Email: "demo@example.com", FilePath: filePath}, nil
+		return plus.RegisterResult{
+			Email:     "demo@example.com",
+			AccountID: "account-1",
+			Tokens: plus.AuthTokens{
+				AccessToken:  "access-token",
+				RefreshToken: "refresh-token",
+			},
+			FilePath: filePath,
+		}, nil
 	}
 
 	store := NewTokenStore()
@@ -128,4 +136,20 @@ func TestTopUpAccountsSerializesConcurrentRuns(t *testing.T) {
 	if got := registerCalls.Load(); got != 1 {
 		t.Fatalf("register calls = %d, want %d", got, 1)
 	}
+}
+
+func writeCredentialFileForTest(path string, accessToken string, refreshToken string, accountID string) error {
+	payload := map[string]any{
+		"last_refresh": time.Now().UTC().Format(time.RFC3339Nano),
+		"tokens": map[string]string{
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+			"account_id":    accountID,
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }

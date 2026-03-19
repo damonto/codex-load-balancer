@@ -12,7 +12,6 @@ const (
 	chatgptURL          = "https://chatgpt.com"
 	codexClientID       = "app_EMoamEEZ73f0CkXaXp7hrann"
 	codexRedirectURI    = "http://localhost:1455/auth/callback"
-	PendingDirName      = "pending"
 	defaultDataDir      = "data"
 	defaultOTPPoll      = 5 * time.Second
 	defaultOTPWait      = 3 * time.Minute
@@ -45,8 +44,6 @@ type RegisterOptions struct {
 	OTPPoll             time.Duration
 	Proxy               string
 	RegistrationProxies []string
-	TelegramBotToken    string
-	TelegramChatID      string
 }
 
 type AuthTokens struct {
@@ -56,22 +53,19 @@ type AuthTokens struct {
 }
 
 type RegisterResult struct {
-	Email       string
-	Proxy       string
-	AccountID   string
-	Session     ChatGPTSession
-	Tokens      AuthTokens
-	CheckoutURL string
-	FilePath    string
+	Email     string
+	Proxy     string
+	AccountID string
+	Session   ChatGPTSession
+	Tokens    AuthTokens
+	FilePath  string
 }
 
 type registrationConfig struct {
-	Proxy            string
-	DataDir          string
-	OTPWait          time.Duration
-	OTPPoll          time.Duration
-	TelegramBotToken string
-	TelegramChatID   string
+	Proxy   string
+	DataDir string
+	OTPWait time.Duration
+	OTPPoll time.Duration
 }
 
 type registrationFlow struct {
@@ -110,7 +104,6 @@ type credentialFile struct {
 	AuthMode     string        `json:"auth_mode"`
 	OpenAIAPIKey *string       `json:"OPENAI_API_KEY"`
 	LastRefresh  string        `json:"last_refresh"`
-	CheckoutURL  string        `json:"checkout_url,omitempty"`
 	CreatedAt    string        `json:"created_at,omitempty"`
 	Tokens       credentialJWT `json:"tokens"`
 }
@@ -122,8 +115,8 @@ type credentialJWT struct {
 	AccountID    string `json:"account_id"`
 }
 
-// RegisterCodexCredential executes registration + Codex login + checkout creation,
-// then writes a pending credential file under data/pending.
+// RegisterCodexCredential executes registration + Codex login + purchase flow,
+// then writes the active credential file after purchase succeeds.
 func RegisterCodexCredential(ctx context.Context, opts RegisterOptions) (RegisterResult, error) {
 	cfg, err := normalizeOptions(opts)
 	if err != nil {

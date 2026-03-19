@@ -408,12 +408,11 @@ func (r *registrationFlow) exchangeToken(ctx context.Context, code string) (Auth
 	return AuthTokens{IDToken: token.IDToken, AccessToken: token.AccessToken, RefreshToken: token.RefreshToken}, nil
 }
 
-func (r *registrationFlow) savePendingCredentialFile(result RegisterResult) (string, error) {
+func (r *registrationFlow) saveCredentialFile(result RegisterResult) (string, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	payload := credentialFile{
 		AuthMode:    "chatgpt",
 		LastRefresh: now,
-		CheckoutURL: result.CheckoutURL,
 		CreatedAt:   now,
 		Tokens: credentialJWT{
 			IDToken:      result.Tokens.IDToken,
@@ -423,25 +422,24 @@ func (r *registrationFlow) savePendingCredentialFile(result RegisterResult) (str
 		},
 	}
 
-	path := filepath.Join(r.cfg.DataDir, PendingDirName)
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		return "", fmt.Errorf("create pending data dir: %w", err)
+	if err := os.MkdirAll(r.cfg.DataDir, 0o755); err != nil {
+		return "", fmt.Errorf("create credential data dir: %w", err)
 	}
 
-	filePath := filepath.Join(path, result.Email+".json")
+	filePath := filepath.Join(r.cfg.DataDir, result.Email+".json")
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode credential json: %w", err)
 	}
 	data = append(data, '\n')
-	if err := writePendingCredentialFile(filePath, data); err != nil {
+	if err := writeCredentialFile(filePath, data); err != nil {
 		return "", fmt.Errorf("write credential file: %w", err)
 	}
 	return filePath, nil
 }
 
-func writePendingCredentialFile(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".pending-credential-*")
+func writeCredentialFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".credential-*")
 	if err != nil {
 		return fmt.Errorf("create temp credential file: %w", err)
 	}

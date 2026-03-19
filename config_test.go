@@ -47,10 +47,6 @@ register_timeout_seconds = 420
 usage_sync_interval_seconds = 600
 usage_sync_concurrency = 4
 
-[telegram]
-bot_token = "bot-token"
-chat_id = "123456789"
-
 [account]
 registration_proxy_pool = ["http://proxy-a", "http://proxy-b"]
 `,
@@ -62,8 +58,6 @@ registration_proxy_pool = ["http://proxy-a", "http://proxy-b"]
 				registerWorkers:    3,
 				registerTimeout:    420 * time.Second,
 				proxyPool:          []string{"http://proxy-a", "http://proxy-b"},
-				telegramBotToken:   "bot-token",
-				telegramChatID:     "123456789",
 				syncInterval:       600 * time.Second,
 				syncConcurrency:    4,
 			},
@@ -120,20 +114,6 @@ data_dir = "/tmp/data"
 registration_proxy_pool = ["  ", ""]
 			`,
 			wantErr: "account.registration_proxy_pool is empty",
-		},
-		{
-			name: "telegram config must be paired",
-			body: `
-api_key = "k"
-data_dir = "/tmp/data"
-
-[telegram]
-bot_token = "bot-token"
-
-[account]
-registration_proxy_pool = ["http://proxy-default"]
-			`,
-			wantErr: "telegram.bot_token and telegram.chat_id must be set together",
 		},
 	}
 

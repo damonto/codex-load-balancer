@@ -21,20 +21,17 @@ type appConfig struct {
 	registerWorkers    int
 	registerTimeout    time.Duration
 	proxyPool          []string
-	telegramBotToken   string
-	telegramChatID     string
 	syncInterval       time.Duration
 	syncConcurrency    int
 }
 
 type fileConfig struct {
-	APIKey   string             `toml:"api_key"`
-	DataDir  string             `toml:"data_dir"`
-	Server   fileServerConfig   `toml:"server"`
-	TopUp    fileTopUpConfig    `toml:"top_up"`
-	Sync     fileSyncConfig     `toml:"sync"`
-	Account  fileAccountConfig  `toml:"account"`
-	Telegram fileTelegramConfig `toml:"telegram"`
+	APIKey  string            `toml:"api_key"`
+	DataDir string            `toml:"data_dir"`
+	Server  fileServerConfig  `toml:"server"`
+	TopUp   fileTopUpConfig   `toml:"top_up"`
+	Sync    fileSyncConfig    `toml:"sync"`
+	Account fileAccountConfig `toml:"account"`
 }
 
 type fileServerConfig struct {
@@ -54,11 +51,6 @@ type fileSyncConfig struct {
 
 type fileAccountConfig struct {
 	RegistrationProxyPool []string `toml:"registration_proxy_pool"`
-}
-
-type fileTelegramConfig struct {
-	BotToken string `toml:"bot_token"`
-	ChatID   string `toml:"chat_id"`
 }
 
 func loadAppConfigFile(path string) (appConfig, error) {
@@ -85,8 +77,6 @@ func loadAppConfigFile(path string) (appConfig, error) {
 		minTrackedAccounts: fc.TopUp.MinTrackedAccounts,
 		registerWorkers:    fc.TopUp.RegisterWorkers,
 		registerTimeout:    secondsOrDefault(fc.TopUp.RegisterTimeoutSeconds, defaultRegisterTimeout),
-		telegramBotToken:   strings.TrimSpace(fc.Telegram.BotToken),
-		telegramChatID:     strings.TrimSpace(fc.Telegram.ChatID),
 		syncInterval:       secondsOrDefault(fc.Sync.UsageSyncIntervalSeconds, defaultUsageSyncInterval),
 		syncConcurrency:    fc.Sync.UsageSyncConcurrency,
 	}
@@ -102,10 +92,6 @@ func loadAppConfigFile(path string) (appConfig, error) {
 	if cfg.syncConcurrency <= 0 {
 		cfg.syncConcurrency = defaultUsageSyncConcurrency
 	}
-	if (cfg.telegramBotToken == "") != (cfg.telegramChatID == "") {
-		return appConfig{}, errors.New("telegram.bot_token and telegram.chat_id must be set together")
-	}
-
 	cfg.proxyPool, err = normalizeProxyPool(fc.Account.RegistrationProxyPool)
 	if err != nil {
 		return appConfig{}, err

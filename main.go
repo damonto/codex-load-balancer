@@ -103,9 +103,6 @@ func bootstrapRuntime(cfg appConfig) (*appRuntime, error) {
 	if err := loadTokensFromDir(store, cfg.dataDir); err != nil {
 		return nil, fmt.Errorf("initial token load: %w", err)
 	}
-	if err := ensurePendingPurchaseDir(cfg.dataDir); err != nil {
-		return nil, err
-	}
 
 	usageDBPath := filepath.Join(cfg.dataDir, "usage.db")
 	usageDB, err := openUsageDB(usageDBPath)
@@ -130,22 +127,16 @@ func closeRuntime(rt *appRuntime) {
 func startBackgroundWorkers(ctx context.Context, cfg appConfig, store *TokenStore) {
 	go runTokenWatcher(ctx, store, cfg.dataDir)
 	topUpOpts := topUpOptions{
-		TargetCount:      cfg.minTrackedAccounts,
-		RegisterWorkers:  cfg.registerWorkers,
-		RegisterTimeout:  cfg.registerTimeout,
-		ProxyPool:        cfg.proxyPool,
-		TelegramBotToken: cfg.telegramBotToken,
-		TelegramChatID:   cfg.telegramChatID,
+		TargetCount:     cfg.minTrackedAccounts,
+		RegisterWorkers: cfg.registerWorkers,
+		RegisterTimeout: cfg.registerTimeout,
+		ProxyPool:       cfg.proxyPool,
 	}
 	usageURL := backendEndpoint(defaultBackendAPIURL, "/wham/usage")
 	go runUsageSyncer(ctx, store, cfg.dataDir, usageURL, usageSyncOptions{
 		Interval:    cfg.syncInterval,
 		Concurrency: cfg.syncConcurrency,
 	}, topUpOpts)
-	go runPendingPurchaseSyncer(ctx, store, cfg.dataDir, usageURL, usageSyncOptions{
-		Interval:    cfg.syncInterval,
-		Concurrency: cfg.syncConcurrency,
-	})
 	if cfg.minTrackedAccounts == 0 {
 		return
 	}

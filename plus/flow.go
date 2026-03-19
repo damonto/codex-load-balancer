@@ -19,6 +19,11 @@ func (r *registrationFlow) execute(ctx context.Context) (RegisterResult, error) 
 	}
 	result.Session = session
 
+	purchase := NewPurchase(r.client, session)
+	if err := purchase.Checkout(ctx); err != nil {
+		return RegisterResult{}, fmt.Errorf("checkout: %w", err)
+	}
+
 	token, accountID, err := r.completeCodexLoginFlow(ctx)
 	if err != nil {
 		return RegisterResult{}, err
@@ -27,22 +32,12 @@ func (r *registrationFlow) execute(ctx context.Context) (RegisterResult, error) 
 	result.Tokens = token
 	slog.Info("codex oauth completed", "email", r.email, "account_id", accountID)
 
-	purchase := NewPurchase(r.client, session, r.cfg.TelegramBotToken, r.cfg.TelegramChatID)
-	checkoutURL, err := purchase.CheckoutURL(ctx)
+	path, err := r.saveCredentialFile(result)
 	if err != nil {
-		return RegisterResult{}, err
-	}
-	result.CheckoutURL = checkoutURL
-
-	path, err := r.savePendingCredentialFile(result)
-	if err != nil {
-		return RegisterResult{}, fmt.Errorf("save pending credential file: %w", err)
+		return RegisterResult{}, fmt.Errorf("save credential file: %w", err)
 	}
 	result.FilePath = path
-	slog.Info("pending credential file saved", "email", r.email, "file", path)
-	if err := purchase.sendCheckoutURL(ctx, checkoutURL); err != nil {
-		slog.Warn("send checkout url", "email", r.email, "file", path, "err", err)
-	}
+	slog.Info("credential file saved", "email", r.email, "file", path)
 
 	return result, nil
 }

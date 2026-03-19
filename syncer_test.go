@@ -370,10 +370,18 @@ func TestSyncUsageOnceTopsUpRemovedFreePlanToken(t *testing.T) {
 
 	registerCodexCredential = func(ctx context.Context, opts plus.RegisterOptions) (plus.RegisterResult, error) {
 		registerCalls.Add(1)
+		filePath := filepath.Join(opts.DataDir, "new.json")
+		if err := writeCredentialFileForTest(filePath, "new-access", "new-refresh", "account-new"); err != nil {
+			return plus.RegisterResult{}, err
+		}
 		return plus.RegisterResult{
 			Email:     "new@example.com",
 			AccountID: "account-new",
-			FilePath:  filepath.Join(opts.DataDir, "new.json"),
+			Tokens: plus.AuthTokens{
+				AccessToken:  "new-access",
+				RefreshToken: "new-refresh",
+			},
+			FilePath: filePath,
 		}, nil
 	}
 

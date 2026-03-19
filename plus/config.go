@@ -22,9 +22,6 @@ func normalizeOptions(opts RegisterOptions) (registrationConfig, error) {
 	if cfg.OTPPoll <= 0 {
 		cfg.OTPPoll = defaultOTPPoll
 	}
-	cfg.TelegramBotToken = strings.TrimSpace(opts.TelegramBotToken)
-	cfg.TelegramChatID = strings.TrimSpace(opts.TelegramChatID)
-
 	proxy := strings.TrimSpace(opts.Proxy)
 	if proxy == "" {
 		proxy = pickRandomProxy(opts.RegistrationProxies)
@@ -40,7 +37,6 @@ func normalizeOptions(opts RegisterOptions) (registrationConfig, error) {
 		return registrationConfig{}, fmt.Errorf("parse proxy: %w", err)
 	}
 	cfg.Proxy = proxy
-
 	return cfg, nil
 }
 

@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,12 +27,10 @@ var (
 )
 
 type topUpOptions struct {
-	TargetCount      int
-	RegisterTimeout  time.Duration
-	RegisterWorkers  int
-	ProxyPool        []string
-	TelegramBotToken string
-	TelegramChatID   string
+	TargetCount     int
+	RegisterTimeout time.Duration
+	RegisterWorkers int
+	ProxyPool       []string
 }
 
 func topUpAccounts(ctx context.Context, store *TokenStore, dataDir string, opts topUpOptions) error {
@@ -40,27 +42,18 @@ func topUpAccounts(ctx context.Context, store *TokenStore, dataDir string, opts 
 	defer topUpMu.Unlock()
 
 	validAccounts := store.ValidAccountCount()
-	pendingAccounts, err := countPendingPurchases(dataDir)
-	if err != nil {
-		return fmt.Errorf("count pending purchases: %w", err)
-	}
-	trackedAccounts := validAccounts + pendingAccounts
-	if trackedAccounts >= opts.TargetCount {
+	if validAccounts >= opts.TargetCount {
 		slog.Info("account top-up skipped",
-			"valid_accounts", validAccounts,
-			"pending_accounts", pendingAccounts,
-			"tracked_accounts", trackedAccounts,
+			"active_accounts", validAccounts,
 			"target", opts.TargetCount,
 		)
 		return nil
 	}
 
-	missing := opts.TargetCount - trackedAccounts
+	missing := opts.TargetCount - validAccounts
 	registerWorkers := resolveRegisterWorkers(opts.RegisterWorkers)
 	slog.Info("account top-up begin",
-		"valid_accounts", validAccounts,
-		"pending_accounts", pendingAccounts,
-		"tracked_accounts", trackedAccounts,
+		"active_accounts", validAccounts,
 		"target", opts.TargetCount,
 		"missing", missing,
 		"workers", registerWorkers,
@@ -71,19 +64,12 @@ func topUpAccounts(ctx context.Context, store *TokenStore, dataDir string, opts 
 	}
 
 	validAccounts = store.ValidAccountCount()
-	pendingAccounts, err = countPendingPurchases(dataDir)
-	if err != nil {
-		return fmt.Errorf("count pending purchases: %w", err)
-	}
-	trackedAccounts = validAccounts + pendingAccounts
-	if trackedAccounts < opts.TargetCount {
-		return fmt.Errorf("tracked accounts %d below target %d", trackedAccounts, opts.TargetCount)
+	if validAccounts < opts.TargetCount {
+		return fmt.Errorf("active accounts %d below target %d", validAccounts, opts.TargetCount)
 	}
 
 	slog.Info("account top-up complete",
-		"valid_accounts", validAccounts,
-		"pending_accounts", pendingAccounts,
-		"tracked_accounts", trackedAccounts,
+		"active_accounts", validAccounts,
 		"target", opts.TargetCount,
 	)
 	return nil
@@ -102,27 +88,18 @@ func topUpMissingAccounts(ctx context.Context, store *TokenStore, dataDir string
 		}
 
 		requested := remaining
-		succeeded, err := registerBatch(ctx, dataDir, requested, trial, opts)
+		succeeded, err := registerBatch(ctx, store, dataDir, requested, trial, opts)
 		if err != nil {
 			return err
 		}
 		remaining -= succeeded
-
-		pendingAccounts, countErr := countPendingPurchases(dataDir)
-		if countErr != nil {
-			slog.Warn("count pending purchases after registration",
-				"trial", trial,
-				"err", countErr,
-			)
-		}
 
 		slog.Info("account top-up trial complete",
 			"trial", trial,
 			"requested", requested,
 			"succeeded", succeeded,
 			"remaining", remaining,
-			"valid_accounts", store.ValidAccountCount(),
-			"pending_accounts", pendingAccounts,
+			"active_accounts", store.ValidAccountCount(),
 		)
 
 		if remaining > 0 {
@@ -138,6 +115,7 @@ func topUpMissingAccounts(ctx context.Context, store *TokenStore, dataDir string
 
 func registerBatch(
 	ctx context.Context,
+	store *TokenStore,
 	dataDir string,
 	attempts int,
 	trial int,
@@ -171,8 +149,6 @@ func registerBatch(
 				result, err := registerCodexCredential(registerCtx, plus.RegisterOptions{
 					DataDir:             dataDir,
 					RegistrationProxies: opts.ProxyPool,
-					TelegramBotToken:    opts.TelegramBotToken,
-					TelegramChatID:      opts.TelegramChatID,
 				})
 				cancel()
 				if err != nil {
@@ -180,6 +156,18 @@ func registerBatch(
 						"trial", trial,
 						"attempt", attempt,
 						"worker", workerID,
+						"err", err,
+					)
+					continue
+				}
+
+				if err := storeRegisteredCredential(store, result); err != nil {
+					slog.Warn("registered credential not loaded",
+						"trial", trial,
+						"attempt", attempt,
+						"worker", workerID,
+						"email", result.Email,
+						"file", result.FilePath,
 						"err", err,
 					)
 					continue
@@ -211,6 +199,73 @@ func registerBatch(
 	close(jobs)
 	wg.Wait()
 	return int(succeeded.Load()), nil
+}
+
+func storeRegisteredCredential(store *TokenStore, result plus.RegisterResult) error {
+	if store == nil {
+		return errors.New("token store is nil")
+	}
+
+	state, modTime, err := tokenStateFromRegisterResult(result)
+	if err != nil {
+		return err
+	}
+	store.UpsertToken(state, modTime)
+	return nil
+}
+
+func tokenStateFromRegisterResult(result plus.RegisterResult) (TokenState, time.Time, error) {
+	filePath := strings.TrimSpace(result.FilePath)
+	if filePath == "" {
+		return TokenState{}, time.Time{}, errors.New("register result file path is empty")
+	}
+
+	modTime := time.Now().UTC()
+	accessToken := strings.TrimSpace(result.Tokens.AccessToken)
+	accountID := strings.TrimSpace(result.AccountID)
+	refreshToken := strings.TrimSpace(result.Tokens.RefreshToken)
+	lastRefresh := time.Time{}
+
+	info, err := os.Stat(filePath)
+	switch {
+	case err == nil:
+		modTime = info.ModTime()
+		parsedAccessToken, parsedAccountID, parsedRefreshToken, parsedLastRefresh, err := parseAuthFile(filePath)
+		if err != nil {
+			return TokenState{}, time.Time{}, fmt.Errorf("parse registered credential: %w", err)
+		}
+		accessToken = parsedAccessToken
+		if parsedAccountID != "" {
+			accountID = parsedAccountID
+		}
+		if parsedRefreshToken != "" {
+			refreshToken = parsedRefreshToken
+		}
+		if !parsedLastRefresh.IsZero() {
+			lastRefresh = parsedLastRefresh
+		}
+	case errors.Is(err, os.ErrNotExist):
+	default:
+		return TokenState{}, time.Time{}, fmt.Errorf("stat registered credential: %w", err)
+	}
+
+	if accessToken == "" {
+		return TokenState{}, time.Time{}, errors.New("register result access token is empty")
+	}
+	if accountID == "" {
+		return TokenState{}, time.Time{}, errors.New("register result account id is empty")
+	}
+
+	return TokenState{
+		ID:           filepath.Base(filePath),
+		Path:         filePath,
+		Token:        accessToken,
+		AccountID:    accountID,
+		Email:        strings.TrimSpace(result.Email),
+		PlanType:     "plus",
+		RefreshToken: refreshToken,
+		LastRefresh:  lastRefresh,
+	}, modTime, nil
 }
 
 func resolveRegisterWorkers(workers int) int {

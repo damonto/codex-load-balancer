@@ -13,10 +13,6 @@ register_timeout_seconds = 360
 usage_sync_interval_seconds = 300
 usage_sync_concurrency = 8
 
-[telegram]
-bot_token = "123456:telegram-bot-token"
-chat_id = "123456789"
-
 [account]
 registration_proxy_pool = [
   "http://user:pass@proxy.example.com:7777",
