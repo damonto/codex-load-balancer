@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/damonto/codex-load-balancer/plus"
 )
 
 func TestLoadAppConfigFile(t *testing.T) {
@@ -57,7 +59,7 @@ registration_proxy_pool = ["http://proxy-a", "http://proxy-b"]
 				minTrackedAccounts: 12,
 				registerWorkers:    3,
 				registerTimeout:    420 * time.Second,
-				proxyPool:          []string{"http://proxy-a", "http://proxy-b"},
+				proxyPool:          plus.RegistrationProxyPool{"http://proxy-a", "http://proxy-b"},
 				syncInterval:       600 * time.Second,
 				syncConcurrency:    4,
 			},
@@ -155,7 +157,7 @@ func defaultAppConfigForTest(apiKey string, dataDir string, proxyPool []string) 
 		minTrackedAccounts: 0,
 		registerWorkers:    defaultRegisterWorkers,
 		registerTimeout:    defaultRegisterTimeout,
-		proxyPool:          proxyPool,
+		proxyPool:          plus.RegistrationProxyPool(proxyPool),
 		syncInterval:       defaultUsageSyncInterval,
 		syncConcurrency:    defaultUsageSyncConcurrency,
 	}

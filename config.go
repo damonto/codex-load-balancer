@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/damonto/codex-load-balancer/plus"
 	toml "github.com/pelletier/go-toml/v2"
 )
 
@@ -22,7 +23,7 @@ type appConfig struct {
 	minTrackedAccounts int
 	registerWorkers    int
 	registerTimeout    time.Duration
-	proxyPool          []string
+	proxyPool          plus.RegistrationProxyPool
 	syncInterval       time.Duration
 	syncConcurrency    int
 }
@@ -118,7 +119,7 @@ func secondsOrDefault(seconds int, fallback time.Duration) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-func normalizeProxyPool(pool []string) ([]string, error) {
+func normalizeProxyPool(pool []string) (plus.RegistrationProxyPool, error) {
 	if len(pool) == 0 {
 		return nil, errors.New("account.registration_proxy_pool is required")
 	}
@@ -132,5 +133,5 @@ func normalizeProxyPool(pool []string) ([]string, error) {
 	if len(clean) == 0 {
 		return nil, errors.New("account.registration_proxy_pool is empty")
 	}
-	return clean, nil
+	return plus.RegistrationProxyPool(clean), nil
 }

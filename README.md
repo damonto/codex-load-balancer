@@ -68,7 +68,7 @@ usage_sync_concurrency = 8
 
 [account]
 registration_proxy_pool = [
-  "http://user:pass@proxy.example.com:7777",
+  "http://user-session-%s:pass@proxy.example.com:7777",
 ]
 ```
 
@@ -76,7 +76,7 @@ Notes:
 
 - Unknown config keys cause startup failure.
 - `account.registration_proxy_pool` must contain at least one non-empty proxy URL.
--
+- If a proxy entry contains `%s`, each registration attempt replaces it with a fresh random `session_id`.
 
 ## Token File Format
 

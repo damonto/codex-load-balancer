@@ -43,7 +43,7 @@ func (r *registrationFlow) execute(ctx context.Context) (RegisterResult, error) 
 }
 
 func (r *registrationFlow) prepareAccountProfile(ctx context.Context) (RegisterResult, error) {
-	result := RegisterResult{Proxy: r.cfg.Proxy}
+	result := RegisterResult{Proxy: r.client.Proxy()}
 
 	email, err := GenerateWithContext(ctx)
 	if err != nil {
@@ -51,7 +51,7 @@ func (r *registrationFlow) prepareAccountProfile(ctx context.Context) (RegisterR
 	}
 	result.Email = email
 	r.email = email
-	slog.Info("account registration started", "email", r.email, "proxy_host", proxyHostOnly(r.cfg.Proxy))
+	slog.Info("account registration started", "email", r.email, "proxy_host", proxyHostOnly(r.client.Proxy()))
 
 	r.password = generatePassword()
 	r.name = generateName()

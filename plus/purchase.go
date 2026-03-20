@@ -172,11 +172,11 @@ func (p *Purchase) Checkout(ctx context.Context) error {
 	for range 5 {
 		if err := p.pay(ctx, checkout); err != nil {
 			lastErr = err
-			slog.Error("checkout failed",
-				"email", p.session.User.Email,
-				"checkout_url", checkout,
-				"err", err,
-			)
+			slog.Error("checkout failed", "email", p.session.User.Email, "err", err)
+			if p.client, err = p.client.Refresh(); err != nil {
+				slog.Error("unable to refresh HTTP client", "email", p.session.User.Email, "err", err)
+				return errors.Join(err, lastErr)
+			}
 			continue
 		}
 		return nil

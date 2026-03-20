@@ -30,7 +30,7 @@ type topUpOptions struct {
 	TargetCount     int
 	RegisterTimeout time.Duration
 	RegisterWorkers int
-	ProxyPool       []string
+	ProxyPool       plus.RegistrationProxyPool
 }
 
 func topUpAccounts(ctx context.Context, store *TokenStore, dataDir string, opts topUpOptions) error {
@@ -147,8 +147,8 @@ func registerBatch(
 
 				registerCtx, cancel := context.WithTimeout(ctx, registerTimeout)
 				result, err := registerCodexCredential(registerCtx, plus.RegisterOptions{
-					DataDir:             dataDir,
-					RegistrationProxies: opts.ProxyPool,
+					DataDir:               dataDir,
+					RegistrationProxyPool: opts.ProxyPool,
 				})
 				cancel()
 				if err != nil {

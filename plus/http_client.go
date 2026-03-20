@@ -18,9 +18,10 @@ import (
 )
 
 type client struct {
-	cfg registrationConfig
-	raw tls_client.HttpClient
-	mu  sync.Mutex
+	cfg   RegisterOptions
+	proxy string
+	raw   tls_client.HttpClient
+	mu    sync.Mutex
 }
 
 type responseError struct {
@@ -35,7 +36,12 @@ func (e responseError) Error() string {
 	return fmt.Sprintf("status %d: %s", e.StatusCode, e.Body)
 }
 
-func newClient(cfg registrationConfig) (*client, error) {
+func newClient(cfg RegisterOptions) (*client, error) {
+	proxy, err := cfg.RegistrationProxyPool.Random()
+	if err != nil {
+		return nil, fmt.Errorf("pick registration proxy: %w", err)
+	}
+
 	jar := tls_client.NewCookieJar()
 	timeoutSeconds := int(defaultHTTPTimeout / time.Second)
 
@@ -43,7 +49,7 @@ func newClient(cfg registrationConfig) (*client, error) {
 		tls_client.WithTimeoutSeconds(timeoutSeconds),
 		tls_client.WithClientProfile(profiles.Chrome_144),
 		tls_client.WithCookieJar(jar),
-		tls_client.WithProxyUrl(cfg.Proxy),
+		tls_client.WithProxyUrl(proxy),
 		tls_client.WithRandomTLSExtensionOrder(),
 	}
 
@@ -52,11 +58,15 @@ func newClient(cfg registrationConfig) (*client, error) {
 		return nil, fmt.Errorf("create tls client: %w", err)
 	}
 	rawClient.SetFollowRedirect(true)
-	return &client{cfg: cfg, raw: rawClient}, nil
+	return &client{cfg: cfg, proxy: proxy, raw: rawClient}, nil
 }
 
 func (c *client) Refresh() (*client, error) {
 	return newClient(c.cfg)
+}
+
+func (c *client) Proxy() string {
+	return c.proxy
 }
 
 func (c *client) Get(ctx context.Context, target string, headers map[string]string) (*http.Response, error) {

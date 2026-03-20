@@ -39,11 +39,10 @@ var (
 )
 
 type RegisterOptions struct {
-	DataDir             string
-	OTPWait             time.Duration
-	OTPPoll             time.Duration
-	Proxy               string
-	RegistrationProxies []string
+	DataDir               string
+	OTPWait               time.Duration
+	OTPPoll               time.Duration
+	RegistrationProxyPool RegistrationProxyPool
 }
 
 type AuthTokens struct {
@@ -61,15 +60,8 @@ type RegisterResult struct {
 	FilePath  string
 }
 
-type registrationConfig struct {
-	Proxy   string
-	DataDir string
-	OTPWait time.Duration
-	OTPPoll time.Duration
-}
-
 type registrationFlow struct {
-	cfg           registrationConfig
+	cfg           RegisterOptions
 	client        *client
 	oaiDID        string
 	email         string

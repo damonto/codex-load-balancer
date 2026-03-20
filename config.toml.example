@@ -15,5 +15,5 @@ usage_sync_concurrency = 8
 
 [account]
 registration_proxy_pool = [
-  "http://user:pass@proxy.example.com:7777",
+  "http://user-session-%s:pass@proxy.example.com:7777",
 ]
