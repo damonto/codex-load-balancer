@@ -1,13 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 const defaultConfigPath = "config.toml"
@@ -54,20 +56,30 @@ type fileAccountConfig struct {
 }
 
 func loadAppConfigFile(path string) (appConfig, error) {
-	var fc fileConfig
-	meta, err := toml.DecodeFile(path, &fc)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return appConfig{}, fmt.Errorf("decode config file %q: %w", path, err)
+		return appConfig{}, fmt.Errorf("read config file %q: %w", path, err)
 	}
 
-	undecoded := meta.Undecoded()
-	if len(undecoded) > 0 {
-		keys := make([]string, 0, len(undecoded))
-		for _, key := range undecoded {
-			keys = append(keys, key.String())
+	var fc fileConfig
+	decoder := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
+	err = decoder.Decode(&fc)
+	if err != nil {
+		var strictErr *toml.StrictMissingError
+		if errors.As(err, &strictErr) {
+			keys := make([]string, 0, len(strictErr.Errors))
+			for _, decodeErr := range strictErr.Errors {
+				key := strings.Join([]string(decodeErr.Key()), ".")
+				if key != "" {
+					keys = append(keys, key)
+				}
+			}
+			if len(keys) > 0 {
+				slices.Sort(keys)
+				return appConfig{}, fmt.Errorf("unknown config keys: %s", strings.Join(keys, ", "))
+			}
 		}
-		slices.Sort(keys)
-		return appConfig{}, fmt.Errorf("unknown config keys: %s", strings.Join(keys, ", "))
+		return appConfig{}, fmt.Errorf("decode config file %q: %w", path, err)
 	}
 
 	cfg := appConfig{
