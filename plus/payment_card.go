@@ -13,7 +13,7 @@ type PaymentCard struct {
 	ExpYear  string
 }
 
-var paymentCardBINs = [...]string{"625817", "625814", "624441"}
+var paymentCardBINs = [...]string{"625817", "624441"}
 
 func randomCard() PaymentCard {
 	return newPaymentCard(paymentCardBINs[randv2.N(len(paymentCardBINs))])
