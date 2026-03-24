@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -57,35 +55,19 @@ type fileAccountConfig struct {
 }
 
 func loadAppConfigFile(path string) (appConfig, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
-		return appConfig{}, fmt.Errorf("read config file %q: %w", path, err)
+		return appConfig{}, fmt.Errorf("open config: %w", err)
 	}
+	defer f.Close()
 
 	var fc fileConfig
-	decoder := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
-	err = decoder.Decode(&fc)
-	if err != nil {
-		var strictErr *toml.StrictMissingError
-		if errors.As(err, &strictErr) {
-			keys := make([]string, 0, len(strictErr.Errors))
-			for _, decodeErr := range strictErr.Errors {
-				key := strings.Join([]string(decodeErr.Key()), ".")
-				if key != "" {
-					keys = append(keys, key)
-				}
-			}
-			if len(keys) > 0 {
-				slices.Sort(keys)
-				return appConfig{}, fmt.Errorf("unknown config keys: %s", strings.Join(keys, ", "))
-			}
-		}
+	if err := toml.NewDecoder(f).DisallowUnknownFields().Decode(&fc); err != nil {
 		return appConfig{}, fmt.Errorf("decode config file %q: %w", path, err)
 	}
-
 	cfg := appConfig{
-		apiKey:             strings.TrimSpace(fc.APIKey),
-		dataDir:            strings.TrimSpace(fc.DataDir),
+		apiKey:             fc.APIKey,
+		dataDir:            fc.DataDir,
 		port:               fc.Server.Port,
 		minTrackedAccounts: fc.TopUp.MinTrackedAccounts,
 		registerWorkers:    fc.TopUp.RegisterWorkers,
