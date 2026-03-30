@@ -12,11 +12,6 @@ import (
 	"time"
 )
 
-const (
-	defaultUsageSyncInterval    = 5 * time.Minute
-	defaultUsageSyncConcurrency = 8
-)
-
 type usageSyncOptions struct {
 	Interval    time.Duration
 	Concurrency int
@@ -24,10 +19,12 @@ type usageSyncOptions struct {
 
 func runUsageSyncer(ctx context.Context, store *TokenStore, dataDir string, usageURL string, syncOpts usageSyncOptions, topUpOpts topUpOptions) {
 	if syncOpts.Interval <= 0 {
-		syncOpts.Interval = defaultUsageSyncInterval
+		slog.Error("usage sync disabled", "reason", "interval must be positive")
+		return
 	}
 	if syncOpts.Concurrency <= 0 {
-		syncOpts.Concurrency = defaultUsageSyncConcurrency
+		slog.Error("usage sync disabled", "reason", "concurrency must be positive")
+		return
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
 	syncUsageOnce(ctx, store, client, dataDir, usageURL, syncOpts, topUpOpts)
@@ -60,7 +57,7 @@ func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, 
 		go func(ref TokenRef) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if syncOneToken(ctx, store, client, usageURL, ref) {
+			if syncOneToken(ctx, store, client, usageURL, ref, topUpOpts.PurchaseConfig.Enabled) {
 				removedCount.Add(1)
 			}
 		}(ref)
@@ -73,6 +70,9 @@ func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, 
 	}
 
 	slog.Warn("usage sync removed tokens", "removed", n)
+	if !topUpOpts.Enabled {
+		return
+	}
 	opts := topUpOpts
 	target := store.ValidAccountCount() + n
 	if opts.TargetCount < target {
@@ -83,7 +83,7 @@ func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, 
 	}
 }
 
-func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, usageURL string, ref TokenRef) bool {
+func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, usageURL string, ref TokenRef, removeFreePlan bool) bool {
 	refreshed, refreshErr := maybeRefreshTokenIfStale(ctx, store, ref.ID, defaultProxyRefreshConfig())
 	if refreshErr != nil {
 		slog.Warn("token refresh failed during usage sync", "token", ref.ID, "err", refreshErr)
@@ -110,13 +110,13 @@ func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, u
 	}
 	if err != nil {
 		if errors.Is(err, errUnauthorized) {
-			return removeTokenAfterUsageRemoval(store, ref.ID, "unauthorized")
+			return removeTokenAndFile(store, ref.ID, "unauthorized")
 		}
 		slog.Warn("usage sync failed", "token", ref.ID, "err", err)
 		return false
 	}
-	if strings.EqualFold(snapshot.PlanType, "free") {
-		return removeTokenAfterUsageRemoval(store, ref.ID, "free_plan")
+	if removeFreePlan && strings.EqualFold(snapshot.PlanType, "free") {
+		return removeTokenAndFile(store, ref.ID, "free_plan")
 	}
 	if !snapshot.FiveHour.Known && !snapshot.Weekly.Known {
 		slog.Warn("usage sync missing quota windows", "token", ref.ID)
@@ -130,23 +130,23 @@ func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, u
 	return false
 }
 
-func removeTokenAfterUsageRemoval(store *TokenStore, tokenID string, reason string) bool {
+func removeTokenAndFile(store *TokenStore, tokenID string, reason string) bool {
 	token, ok := store.RemoveToken(tokenID)
 	if !ok {
-		slog.Warn("token missing on usage removal", "token", tokenID, "reason", reason)
+		slog.Warn("token missing on removal", "token", tokenID, "reason", reason)
 		return false
 	}
 
 	if token.Path == "" {
-		slog.Warn("token removed after usage sync", "token", tokenID, "reason", reason, "path_reason", "missing_token_path")
+		slog.Warn("token removed", "token", tokenID, "reason", reason, "path_reason", "missing_token_path")
 		return true
 	}
 
 	if err := os.Remove(token.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Warn("remove token file after usage sync", "token", tokenID, "path", token.Path, "reason", reason, "err", err)
+		slog.Warn("remove token file", "token", tokenID, "path", token.Path, "reason", reason, "err", err)
 		return true
 	}
 
-	slog.Warn("token removed after usage sync", "token", tokenID, "path", token.Path, "reason", reason)
+	slog.Warn("token removed", "token", tokenID, "path", token.Path, "reason", reason)
 	return true
 }

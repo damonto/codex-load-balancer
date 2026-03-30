@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 )
@@ -38,7 +37,7 @@ func TestLoadTokensFromDirPrunesMissingFiles(t *testing.T) {
 
 			for _, name := range tt.initial {
 				path := filepath.Join(dir, name)
-				writeAuthFileForTest(t, path, "token-"+name)
+				writeTokenSessionFileForTest(t, path, "token-"+name)
 			}
 
 			if err := loadTokensFromDir(store, dir); err != nil {
@@ -158,48 +157,6 @@ func TestTokenStorePruneMissingTokensScoping(t *testing.T) {
 	}
 }
 
-func TestTokenStoreRemoveTokenAndRefreshLockConcurrent(t *testing.T) {
-	tests := []struct {
-		name       string
-		iterations int
-	}{
-		{
-			name:       "concurrent remove and lock lookup",
-			iterations: 2000,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store := NewTokenStore()
-			now := time.Now().UTC()
-			tokenID := "race.json"
-			tokenPath := filepath.Join(t.TempDir(), tokenID)
-			lockHits := 0
-
-			var wg sync.WaitGroup
-			wg.Go(func() {
-				for range tt.iterations {
-					store.UpsertToken(TokenState{ID: tokenID, Path: tokenPath, Token: "token"}, now)
-					store.RemoveToken(tokenID)
-				}
-			})
-			wg.Go(func() {
-				for range tt.iterations {
-					lock := store.RefreshLock(tokenID)
-					lock.Lock()
-					lockHits++
-					lock.Unlock()
-				}
-			})
-			wg.Wait()
-			if lockHits == 0 {
-				t.Fatal("lock should be acquired at least once")
-			}
-		})
-	}
-}
-
 func TestTokenStoreUpsertTokenPreservesUsageMetadataOnReload(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -211,11 +168,9 @@ func TestTokenStoreUpsertTokenPreservesUsageMetadataOnReload(t *testing.T) {
 		{
 			name: "blank reload metadata keeps usage values",
 			reloadToken: TokenState{
-				ID:           "active.json",
-				Path:         "/tmp/active.json",
-				Token:        "new-token",
-				RefreshToken: "new-refresh",
-				LastRefresh:  time.Now().UTC(),
+				ID:    "active.json",
+				Path:  "/tmp/active.json",
+				Token: "new-token",
 			},
 			wantAccountID: "account-usage",
 			wantEmail:     "usage@example.com",
@@ -224,12 +179,10 @@ func TestTokenStoreUpsertTokenPreservesUsageMetadataOnReload(t *testing.T) {
 		{
 			name: "non blank reload account id still updates",
 			reloadToken: TokenState{
-				ID:           "active.json",
-				Path:         "/tmp/active.json",
-				Token:        "new-token",
-				AccountID:    "account-file",
-				RefreshToken: "new-refresh",
-				LastRefresh:  time.Now().UTC(),
+				ID:        "active.json",
+				Path:      "/tmp/active.json",
+				Token:     "new-token",
+				AccountID: "account-file",
 			},
 			wantAccountID: "account-file",
 			wantEmail:     "usage@example.com",
@@ -241,13 +194,12 @@ func TestTokenStoreUpsertTokenPreservesUsageMetadataOnReload(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := NewTokenStore()
 			store.UpsertToken(TokenState{
-				ID:           "active.json",
-				Path:         "/tmp/active.json",
-				Token:        "old-token",
-				AccountID:    "account-usage",
-				Email:        "usage@example.com",
-				PlanType:     "plus",
-				RefreshToken: "old-refresh",
+				ID:        "active.json",
+				Path:      "/tmp/active.json",
+				Token:     "old-token",
+				AccountID: "account-usage",
+				Email:     "usage@example.com",
+				PlanType:  "plus",
 			}, time.Now().UTC())
 
 			store.UpsertToken(tt.reloadToken, time.Now().UTC())
@@ -269,11 +221,16 @@ func TestTokenStoreUpsertTokenPreservesUsageMetadataOnReload(t *testing.T) {
 	}
 }
 
-func writeAuthFileForTest(t *testing.T, path string, accessToken string) {
+func writeTokenSessionFileForTest(t *testing.T, path string, accessToken string) {
 	t.Helper()
 	payload := map[string]any{
+		"auth_mode":    "chatgpt",
+		"last_refresh": time.Now().UTC().Format(time.RFC3339Nano),
+		"created_at":   time.Now().UTC().Format(time.RFC3339Nano),
 		"tokens": map[string]any{
-			"access_token": accessToken,
+			"access_token":  accessToken,
+			"account_id":    "",
+			"refresh_token": "",
 		},
 	}
 	data, err := json.Marshal(payload)

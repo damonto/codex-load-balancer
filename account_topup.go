@@ -16,9 +16,7 @@ import (
 )
 
 const (
-	defaultRegisterWorkers    = 5
 	defaultTopUpRetryInterval = 5 * time.Second
-	defaultRegisterTimeout    = 6 * time.Minute
 )
 
 var (
@@ -27,15 +25,26 @@ var (
 )
 
 type topUpOptions struct {
+	Enabled         bool
 	TargetCount     int
 	RegisterTimeout time.Duration
 	RegisterWorkers int
 	ProxyPool       plus.RegistrationProxyPool
+	PurchaseConfig  plus.PurchaseConfig
 }
 
 func topUpAccounts(ctx context.Context, store *TokenStore, dataDir string, opts topUpOptions) error {
+	if !opts.Enabled {
+		return nil
+	}
 	if opts.TargetCount <= 0 {
 		return nil
+	}
+	if opts.RegisterWorkers <= 0 {
+		return errors.New("register workers must be positive")
+	}
+	if opts.RegisterTimeout <= 0 {
+		return errors.New("register timeout must be positive")
 	}
 
 	topUpMu.Lock()
@@ -51,12 +60,11 @@ func topUpAccounts(ctx context.Context, store *TokenStore, dataDir string, opts 
 	}
 
 	missing := opts.TargetCount - validAccounts
-	registerWorkers := resolveRegisterWorkers(opts.RegisterWorkers)
 	slog.Info("account top-up begin",
 		"active_accounts", validAccounts,
 		"target", opts.TargetCount,
 		"missing", missing,
-		"workers", registerWorkers,
+		"workers", opts.RegisterWorkers,
 	)
 
 	if err := topUpMissingAccounts(ctx, store, dataDir, missing, opts); err != nil {
@@ -124,14 +132,7 @@ func registerBatch(
 	if attempts <= 0 {
 		return 0, nil
 	}
-
-	registerTimeout := opts.RegisterTimeout
-	if registerTimeout <= 0 {
-		registerTimeout = defaultRegisterTimeout
-	}
-	registerWorkers := resolveRegisterWorkers(opts.RegisterWorkers)
-
-	workerCount := min(registerWorkers, attempts)
+	workerCount := min(opts.RegisterWorkers, attempts)
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	var succeeded atomic.Int32
@@ -145,10 +146,11 @@ func registerBatch(
 					return
 				}
 
-				registerCtx, cancel := context.WithTimeout(ctx, registerTimeout)
+				registerCtx, cancel := context.WithTimeout(ctx, opts.RegisterTimeout)
 				result, err := registerCodexCredential(registerCtx, plus.RegisterOptions{
 					DataDir:               dataDir,
 					RegistrationProxyPool: opts.ProxyPool,
+					Purchase:              opts.PurchaseConfig,
 				})
 				cancel()
 				if err != nil {
@@ -225,6 +227,8 @@ func tokenStateFromRegisterResult(result plus.RegisterResult) (TokenState, time.
 	accountID := strings.TrimSpace(result.AccountID)
 	refreshToken := strings.TrimSpace(result.Tokens.RefreshToken)
 	lastRefresh := time.Time{}
+	email := strings.TrimSpace(result.Session.User.Email)
+	planType := strings.TrimSpace(result.Session.Account.PlanType)
 
 	info, err := os.Stat(filePath)
 	switch {
@@ -255,22 +259,18 @@ func tokenStateFromRegisterResult(result plus.RegisterResult) (TokenState, time.
 	if accountID == "" {
 		return TokenState{}, time.Time{}, errors.New("register result account id is empty")
 	}
+	if email == "" {
+		email = strings.TrimSpace(result.Email)
+	}
 
 	return TokenState{
 		ID:           filepath.Base(filePath),
 		Path:         filePath,
 		Token:        accessToken,
 		AccountID:    accountID,
-		Email:        strings.TrimSpace(result.Email),
-		PlanType:     "plus",
+		Email:        email,
+		PlanType:     planType,
 		RefreshToken: refreshToken,
 		LastRefresh:  lastRefresh,
 	}, modTime, nil
-}
-
-func resolveRegisterWorkers(workers int) int {
-	if workers <= 0 {
-		return defaultRegisterWorkers
-	}
-	return workers
 }

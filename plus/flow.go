@@ -19,9 +19,14 @@ func (r *registrationFlow) execute(ctx context.Context) (RegisterResult, error) 
 	}
 	result.Session = session
 
-	purchase := NewPurchase(r.client, session)
-	if err := purchase.Checkout(ctx); err != nil {
-		return RegisterResult{}, fmt.Errorf("checkout: %w", err)
+	if r.cfg.Purchase.Enabled {
+		purchase := NewPurchase(r.client, session, r.cfg.Purchase)
+		if err := purchase.Checkout(ctx); err != nil {
+			return RegisterResult{}, fmt.Errorf("checkout: %w", err)
+		}
+		slog.Info("purchase completed", "email", r.email, "account_id", session.Account.ID)
+	} else {
+		slog.Info("purchase skipped", "email", r.email, "account_id", session.Account.ID)
 	}
 
 	token, accountID, err := r.completeCodexLoginFlow(ctx)
@@ -101,7 +106,6 @@ func (r *registrationFlow) completeRegistrationFlow(ctx context.Context) (ChatGP
 }
 
 func (r *registrationFlow) completeCodexLoginFlow(ctx context.Context) (AuthTokens, string, error) {
-	// Registration and Codex OAuth login are handled as two separate sessions in the reference flow.
 	if err := r.resetAuthSession(); err != nil {
 		return AuthTokens{}, "", fmt.Errorf("reset auth session for codex login: %w", err)
 	}

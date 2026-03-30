@@ -3,7 +3,6 @@ package plus
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"time"
 )
 
@@ -23,17 +22,17 @@ const (
 	sentinelActionAuthorizeContinue = "authorize_continue"
 	sentinelActionPasswordVerify    = "password_verify"
 
-	authPageTypeLoginPassword          authPageType = "login_password"
-	authPageTypeEmailOTPVerification   authPageType = "email_otp_verification"
-	authPageTypeChatGPTConsent         authPageType = "sign_in_with_chatgpt_consent"
-	authPageTypeChatGPTCodexConsent    authPageType = "sign_in_with_chatgpt_codex_consent"
-	authPageTypeWorkspaceSelection     authPageType = "workspace_selection"
-	authPageTypeExternalURL            authPageType = "external_url"
-	defaultOAuthFollowRedirectMaxSteps              = 15
+	authPageTypeLoginPassword        authPageType = "login_password"
+	authPageTypeEmailOTPVerification authPageType = "email_otp_verification"
+	authPageTypeChatGPTConsent       authPageType = "sign_in_with_chatgpt_consent"
+	authPageTypeChatGPTCodexConsent  authPageType = "sign_in_with_chatgpt_codex_consent"
+	authPageTypeWorkspaceSelection   authPageType = "workspace_selection"
+	authPageTypeExternalURL          authPageType = "external_url"
+
+	defaultOAuthFollowRedirectMaxSteps = 15
 )
 
 var (
-	otpPattern           = regexp.MustCompile(`\b(\d{6})\b`)
 	oauthCallbackPattern = buildOAuthCallbackPattern(codexRedirectURI)
 	codexRedirectURL     = buildRedirectURL(codexRedirectURI)
 )
@@ -43,6 +42,7 @@ type RegisterOptions struct {
 	OTPWait               time.Duration
 	OTPPoll               time.Duration
 	RegistrationProxyPool RegistrationProxyPool
+	Purchase              PurchaseConfig
 }
 
 type AuthTokens struct {
@@ -107,8 +107,8 @@ type credentialJWT struct {
 	AccountID    string `json:"account_id"`
 }
 
-// RegisterCodexCredential executes registration + Codex login + purchase flow,
-// then writes the active credential file after purchase succeeds.
+// RegisterCodexCredential executes registration + optional purchase + Codex login,
+// then writes the active credential file.
 func RegisterCodexCredential(ctx context.Context, opts RegisterOptions) (RegisterResult, error) {
 	cfg, err := normalizeOptions(opts)
 	if err != nil {

@@ -3,10 +3,9 @@ package plus
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
-func TestClientRefreshPicksFreshProxy(t *testing.T) {
+func TestNewClientPicksFreshProxy(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -51,20 +50,12 @@ func TestClientRefreshPicksFreshProxy(t *testing.T) {
 				t.Fatalf("newClient() error = %v", err)
 			}
 
-			refreshed, err := client.Refresh()
+			other, err := newClient(tt.cfg)
 			if err != nil {
-				t.Fatalf("Refresh() error = %v", err)
+				t.Fatalf("newClient() second error = %v", err)
 			}
-
-			deadline := time.Now().Add(100 * time.Millisecond)
-			for client.Proxy() == refreshed.Proxy() && time.Now().Before(deadline) {
-				refreshed, err = client.Refresh()
-				if err != nil {
-					t.Fatalf("Refresh() retry error = %v", err)
-				}
-			}
-			if client.Proxy() == refreshed.Proxy() {
-				t.Fatalf("Refresh() should pick a fresh proxy, got %q twice", client.Proxy())
+			if client.Proxy() == other.Proxy() {
+				t.Fatalf("newClient() should pick a fresh proxy, got %q twice", client.Proxy())
 			}
 		})
 	}

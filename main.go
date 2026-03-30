@@ -127,17 +127,19 @@ func closeRuntime(rt *appRuntime) {
 func startBackgroundWorkers(ctx context.Context, cfg appConfig, store *TokenStore) {
 	go runTokenWatcher(ctx, store, cfg.dataDir)
 	topUpOpts := topUpOptions{
+		Enabled:         cfg.topUpEnabled,
 		TargetCount:     cfg.minTrackedAccounts,
 		RegisterWorkers: cfg.registerWorkers,
 		RegisterTimeout: cfg.registerTimeout,
 		ProxyPool:       cfg.proxyPool,
+		PurchaseConfig:  cfg.purchaseConfig,
 	}
 	usageURL := backendEndpoint(defaultBackendAPIURL, "/wham/usage")
 	go runUsageSyncer(ctx, store, cfg.dataDir, usageURL, usageSyncOptions{
 		Interval:    cfg.syncInterval,
 		Concurrency: cfg.syncConcurrency,
 	}, topUpOpts)
-	if cfg.minTrackedAccounts == 0 {
+	if !cfg.topUpEnabled || cfg.minTrackedAccounts == 0 {
 		return
 	}
 

@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"html"
 	randv2 "math/rand/v2"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
-
-	http "github.com/bogdanfinn/fhttp"
 )
+
+var otpPattern = regexp.MustCompile(`\b(\d{6})\b`)
 
 func generateName() string {
 	firstNames := []string{

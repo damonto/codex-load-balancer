@@ -40,13 +40,18 @@ Startup flag:
 
 - `api_key` (required): API key for protected interfaces.
 - `data_dir` (required): Directory containing active `*.json` auth files.
-- `server.port` (optional): Listen port (default 8080).
-- `top_up.min_tracked_accounts` (optional): Background top-up target based on active account count (0 disables startup top-up).
-- `top_up.register_workers` (optional): Concurrent registration workers for startup/runtime top-up (default 5).
-- `top_up.register_timeout_seconds` (optional): Per-registration timeout (default 360).
-- `sync.usage_sync_interval_seconds` (optional): Usage sync interval (default 300).
-- `sync.usage_sync_concurrency` (optional): Usage sync concurrency (default 8).
+- `server.port` (required): Listen port.
+- `top_up.enabled` (required): Whether to auto register replacement accounts for startup top-up and post-removal top-up.
+- `top_up.min_tracked_accounts` (required): Background top-up target based on active account count.
+- `top_up.register_workers` (required): Concurrent registration workers for startup/runtime top-up.
+- `top_up.register_timeout_seconds` (required): Per-registration timeout.
+- `sync.usage_sync_interval_seconds` (required): Usage sync interval.
+- `sync.usage_sync_concurrency` (required): Usage sync concurrency.
 - `account.registration_proxy_pool` (required): Registration proxy pool for account top-up.
+- `account.payment_card.bins` (required when `top_up.enabled=true` and `account.purchase.enabled=true`): Card prefixes when `topup_enabled=true`, or full 16-digit card numbers when `topup_enabled=false`.
+- `account.payment_card.topup_enabled` (required when `top_up.enabled=true` and `account.purchase.enabled=true`): Whether to expand each configured `bins` entry into a random 16-digit card number.
+- `account.purchase.enabled` (required): Whether account registration should run the purchase step.
+- `account.purchase.*` (required when `top_up.enabled=true` and `account.purchase.enabled=true`): Checkout and billing fields used during account purchase.
 
 Current example:
 
@@ -58,6 +63,7 @@ data_dir = "/app/data"
 port = 8080
 
 [top_up]
+enabled = true
 min_tracked_accounts = 0
 register_workers = 5
 register_timeout_seconds = 360
@@ -70,28 +76,54 @@ usage_sync_concurrency = 8
 registration_proxy_pool = [
   "http://user-session-%s:pass@proxy.example.com:7777",
 ]
+
+[account.payment_card]
+bins = ["625817", "624441"]
+topup_enabled = true
+
+[account.purchase]
+enabled = true
+plan_name = "chatgptplusplan"
+currency = "KRW"
+promo_campaign_id = "plus-1-month-free"
+checkout_ui_mode = "custom"
+
+[account.purchase.billing]
+name = "Minjun Kim"
+country = "KR"
+address_line1 = "1 Teheran-ro, Gangnam-gu"
+address_state = "Seoul"
+postal_code = "06141"
 ```
 
 Notes:
 
 - Unknown config keys cause startup failure.
+- `top_up.enabled = false` disables both startup top-up and replacement account registration after `401` / downgraded accounts are removed.
 - `account.registration_proxy_pool` must contain at least one non-empty proxy URL.
+- When `top_up.enabled = true` and `account.purchase.enabled = true`, missing payment card fields or any required purchase/billing field causes startup failure.
+- When `account.purchase.enabled = false`, registration skips the purchase step, still completes Codex OAuth, writes the Codex credential JSON, and usage sync no longer removes accounts just because `plan_type=free`.
 - If a proxy entry contains `%s`, each registration attempt replaces it with a fresh random `session_id`.
+- When `account.payment_card.topup_enabled = true`, payment card numbers are generated as 16 digits; the random middle digits are inferred automatically from the BIN length before appending the final Luhn digit.
+- When `account.payment_card.topup_enabled = false`, each `account.payment_card.bins` entry must already be a full 16-digit card number.
 
 ## Token File Format
 
-Codex load balancer expects Codex-style `auth.json` files. Only `tokens.access_token` is required. If `refresh_token` and `last_refresh` exist, Codex load balancer can refresh tokens every 8 days.
+Codex load balancer stores Codex credential JSON. The proxy reads `.tokens.access_token`, `.tokens.account_id`, `.tokens.refresh_token`, and `.last_refresh` from each `*.json` file.
 
 Example:
 
 ```json
 {
+  "auth_mode": "chatgpt",
+  "last_refresh": "2026-03-30T16:00:00Z",
+  "created_at": "2026-03-30T16:00:00Z",
   "tokens": {
+    "id_token": "...",
     "access_token": "...",
     "refresh_token": "...",
-    "account_id": "..."
-  },
-  "last_refresh": "2026-01-01T00:00:00Z"
+    "account_id": "account_123"
+  }
 }
 ```
 
@@ -128,8 +160,9 @@ If the upstream responds with status `429` or contains `"You've hit your usage l
 - Syncs at startup and every 5 minutes.
 - Uses `https://chatgpt.com/backend-api/wham/usage`.
 - Account metadata shown in the dashboard, including `email` and `plan_type`, comes from the usage response in real time.
-- On `401` during sync, Codex load balancer first attempts one forced refresh; if usage still returns `401`, it removes the token file, evicts the token from memory, and tops up the same count with new registrations.
-- If usage reports `plan_type=free`, Codex load balancer treats the account as downgraded, removes it, and tops up a replacement account.
+- Before proxying or syncing usage, Codex load balancer refreshes stale access tokens from the stored refresh token.
+- On `401`, Codex load balancer refreshes once and retries. If the token still stays unauthorized during usage sync, it removes the credential file, evicts the token from memory, and tops up the same count with new registrations.
+- If usage reports `plan_type=free`, Codex load balancer removes the account only when `account.purchase.enabled = true`.
 
 ## Dashboard
 
@@ -160,7 +193,7 @@ If old `usage_events.account_key` rows were written as `user_xx`, migrate them t
 ./migrate_usage_account_keys.sh --apply --db data/usage.db --data-dir data
 ```
 
-The script reads only `.tokens.account_id` from token JSON files. It does not parse JWTs.
+The script reads only `.tokens.account_id` from credential JSON files. It does not parse JWTs.
 
 ## Logs
 

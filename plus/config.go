@@ -9,7 +9,7 @@ import (
 func normalizeOptions(opts RegisterOptions) (RegisterOptions, error) {
 	opts.DataDir = strings.TrimSpace(opts.DataDir)
 	if opts.DataDir == "" {
-		opts.DataDir = defaultDataDir
+		return RegisterOptions{}, errors.New("data dir is empty")
 	}
 	if opts.OTPWait <= 0 {
 		opts.OTPWait = defaultOTPWait
@@ -21,6 +21,11 @@ func normalizeOptions(opts RegisterOptions) (RegisterOptions, error) {
 	if len(opts.RegistrationProxyPool) == 0 {
 		return RegisterOptions{}, errors.New("proxy pool is empty")
 	}
+	purchase, err := ValidatePurchaseConfig(opts.Purchase)
+	if err != nil {
+		return RegisterOptions{}, fmt.Errorf("validate purchase config: %w", err)
+	}
+	opts.Purchase = purchase
 	return opts, nil
 }
 

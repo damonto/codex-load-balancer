@@ -19,11 +19,21 @@ const stripeFixedHash = "fidnandhYHdWcXxpYCc%2FJ2FgY2RwaXEnKSdpamZkaWAnPydgaycpJ
 type Purchase struct {
 	client  *client
 	session ChatGPTSession
+	cfg     PurchaseConfig
 }
 
-type PaymentBilling struct {
+type PurchaseConfig struct {
+	Enabled         bool
+	PlanName        string
+	Currency        string
+	PromoCampaignID string
+	CheckoutUIMode  string
+	Billing         PurchaseBillingConfig
+	PaymentCard     PaymentCardConfig
+}
+
+type PurchaseBillingConfig struct {
 	Name         string
-	Email        string
 	Country      string
 	AddressLine1 string
 	AddressState string
@@ -99,14 +109,76 @@ func (c checkoutResponse) String() string {
 	)
 }
 
-func NewPurchase(client *client, session ChatGPTSession) *Purchase {
+type PaymentBilling struct {
+	Name         string
+	Email        string
+	Country      string
+	AddressLine1 string
+	AddressState string
+	PostalCode   string
+}
+
+func ValidatePurchaseConfig(cfg PurchaseConfig) (PurchaseConfig, error) {
+	if !cfg.Enabled {
+		return cfg, nil
+	}
+	cfg.PlanName = strings.TrimSpace(cfg.PlanName)
+	if cfg.PlanName == "" {
+		return PurchaseConfig{}, errors.New("purchase plan name is empty")
+	}
+	cfg.Currency = strings.TrimSpace(cfg.Currency)
+	if cfg.Currency == "" {
+		return PurchaseConfig{}, errors.New("purchase currency is empty")
+	}
+	cfg.PromoCampaignID = strings.TrimSpace(cfg.PromoCampaignID)
+	if cfg.PromoCampaignID == "" {
+		return PurchaseConfig{}, errors.New("purchase promo campaign id is empty")
+	}
+	cfg.CheckoutUIMode = strings.TrimSpace(cfg.CheckoutUIMode)
+	if cfg.CheckoutUIMode == "" {
+		return PurchaseConfig{}, errors.New("purchase checkout ui mode is empty")
+	}
+	cfg.Billing.Name = strings.TrimSpace(cfg.Billing.Name)
+	if cfg.Billing.Name == "" {
+		return PurchaseConfig{}, errors.New("purchase billing name is empty")
+	}
+	cfg.Billing.Country = strings.TrimSpace(cfg.Billing.Country)
+	if cfg.Billing.Country == "" {
+		return PurchaseConfig{}, errors.New("purchase billing country is empty")
+	}
+	cfg.Billing.AddressLine1 = strings.TrimSpace(cfg.Billing.AddressLine1)
+	if cfg.Billing.AddressLine1 == "" {
+		return PurchaseConfig{}, errors.New("purchase billing address line1 is empty")
+	}
+	cfg.Billing.AddressState = strings.TrimSpace(cfg.Billing.AddressState)
+	if cfg.Billing.AddressState == "" {
+		return PurchaseConfig{}, errors.New("purchase billing address state is empty")
+	}
+	cfg.Billing.PostalCode = strings.TrimSpace(cfg.Billing.PostalCode)
+	if cfg.Billing.PostalCode == "" {
+		return PurchaseConfig{}, errors.New("purchase billing postal code is empty")
+	}
+	paymentCard, err := normalizePaymentCardConfig(cfg.PaymentCard)
+	if err != nil {
+		return PurchaseConfig{}, fmt.Errorf("normalize payment card config: %w", err)
+	}
+	cfg.PaymentCard = paymentCard
+	return cfg, nil
+}
+
+func NewPurchase(client *client, session ChatGPTSession, cfg PurchaseConfig) *Purchase {
 	return &Purchase{
 		client:  client,
 		session: session,
+		cfg:     cfg,
 	}
 }
 
 func (p *Purchase) Checkout(ctx context.Context) error {
+	if !p.cfg.Enabled {
+		return nil
+	}
+
 	checkout, err := p.requestCheckoutURL(ctx)
 	if err != nil {
 		return fmt.Errorf("request plus checkout: %w", err)
@@ -114,14 +186,10 @@ func (p *Purchase) Checkout(ctx context.Context) error {
 	slog.Info("checkout", "email", p.session.User.Email, "checkout_url", checkout)
 
 	var lastErr error
-	for range 5 {
+	for range 10 {
 		if err := p.pay(ctx, checkout); err != nil {
 			lastErr = err
 			slog.Error("checkout failed", "email", p.session.User.Email, "err", err)
-			if p.client, err = p.client.Refresh(); err != nil {
-				slog.Error("unable to refresh HTTP client", "email", p.session.User.Email, "err", err)
-				return errors.Join(err, lastErr)
-			}
 			continue
 		}
 		return nil
@@ -131,16 +199,16 @@ func (p *Purchase) Checkout(ctx context.Context) error {
 
 func (p *Purchase) requestCheckoutURL(ctx context.Context) (checkoutResponse, error) {
 	request := checkoutRequest{
-		PlanName: "chatgptplusplan",
+		PlanName: p.cfg.PlanName,
 		BillingDetails: checkoutBillingDetails{
-			Country:  "KR",
-			Currency: "KRW",
+			Country:  p.cfg.Billing.Country,
+			Currency: p.cfg.Currency,
 		},
 		PromoCampaign: checkoutPromoCampaign{
-			PromoCampaignID:        "plus-1-month-free",
+			PromoCampaignID:        p.cfg.PromoCampaignID,
 			IsCouponFromQueryParam: false,
 		},
-		CheckoutUIMode: "custom",
+		CheckoutUIMode: p.cfg.CheckoutUIMode,
 	}
 	var response checkoutResponse
 	err := p.client.PostJSON(ctx, chatgptURL+"/backend-api/payments/checkout", map[string]string{
@@ -160,15 +228,15 @@ func (p *Purchase) pay(ctx context.Context, checkout checkoutResponse) error {
 	}
 
 	billing := PaymentBilling{
-		Name:         "Minjun Kim",
+		Name:         p.cfg.Billing.Name,
 		Email:        strings.TrimSpace(p.session.User.Email),
-		Country:      "KR",
-		AddressLine1: "1 Teheran-ro, Gangnam-gu",
-		AddressState: "Seoul",
-		PostalCode:   "06141",
+		Country:      p.cfg.Billing.Country,
+		AddressLine1: p.cfg.Billing.AddressLine1,
+		AddressState: p.cfg.Billing.AddressState,
+		PostalCode:   p.cfg.Billing.PostalCode,
 	}
 
-	card := randomCard()
+	card := randomCard(p.cfg.PaymentCard)
 	paymentMethod, err := p.createPaymentMethod(ctx, checkout, billing, card, fingerprint)
 	if err != nil {
 		return fmt.Errorf("create payment method for %s: %w", card.Number, err)
@@ -205,34 +273,10 @@ func (p *Purchase) fetchStripeFingerprint(ctx context.Context) (stripeFingerprin
 	if err == nil && fingerprint.GUID != "" {
 		return fingerprint, nil
 	}
-	// Keep a local fallback so the flow remains testable even if the mock host omits /6.
-	if fallback, fallbackErr := newStripeFingerprint(); fallbackErr == nil {
-		return fallback, nil
-	}
 	if err != nil {
 		return stripeFingerprint{}, err
 	}
 	return stripeFingerprint{}, errors.New("stripe fingerprint guid is empty")
-}
-
-func newStripeFingerprint() (stripeFingerprint, error) {
-	guid, err := randomHexString(16)
-	if err != nil {
-		return stripeFingerprint{}, err
-	}
-	muid, err := randomHexString(16)
-	if err != nil {
-		return stripeFingerprint{}, err
-	}
-	sid, err := randomHexString(16)
-	if err != nil {
-		return stripeFingerprint{}, err
-	}
-	return stripeFingerprint{
-		GUID: guid,
-		MUID: muid,
-		SID:  sid,
-	}, nil
 }
 
 func (p *Purchase) createPaymentMethod(ctx context.Context, checkout checkoutResponse, billing PaymentBilling, card PaymentCard, fingerprint stripeFingerprint) (string, error) {

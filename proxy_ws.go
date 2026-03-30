@@ -68,13 +68,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 			}
 		}
 
-		s.applyUsageFromHeaders(token.ID, upstream.resp.Header)
-		if upstream.resp.StatusCode != http.StatusSwitchingProtocols {
-			if usage, ok := extractTokenUsageFromBody(upstream.body); ok {
-				s.recordTokenUsage(token, path, upstream.resp.StatusCode, false, usage)
-			}
-		}
-
 		if upstream.resp.StatusCode == http.StatusUnauthorized {
 			tried[token.ID] = true
 			if sessionID != "" {
@@ -85,6 +78,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 				return
 			}
 			continue
+		}
+
+		s.applyUsageFromHeaders(token.ID, upstream.resp.Header)
+		if upstream.resp.StatusCode != http.StatusSwitchingProtocols {
+			if usage, ok := extractTokenUsageFromBody(upstream.body); ok {
+				s.recordTokenUsage(token, path, upstream.resp.StatusCode, false, usage)
+			}
 		}
 
 		if isLimitError(upstream.resp.StatusCode, upstream.body) {

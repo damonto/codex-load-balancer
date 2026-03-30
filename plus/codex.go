@@ -437,30 +437,3 @@ func (r *registrationFlow) saveCredentialFile(result RegisterResult) (string, er
 	}
 	return filePath, nil
 }
-
-func writeCredentialFile(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".credential-*")
-	if err != nil {
-		return fmt.Errorf("create temp credential file: %w", err)
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("write temp credential file: %w", err)
-	}
-	if err := tmp.Chmod(0o644); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("chmod temp credential file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp credential file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename temp credential file: %w", err)
-	}
-	return nil
-}

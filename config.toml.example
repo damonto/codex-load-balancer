@@ -5,6 +5,7 @@ data_dir = "/app/data"
 port = 8080
 
 [top_up]
+enabled = true
 min_tracked_accounts = 0
 register_workers = 5
 register_timeout_seconds = 360
@@ -17,3 +18,21 @@ usage_sync_concurrency = 8
 registration_proxy_pool = [
   "http://user-session-%s:pass@proxy.example.com:7777",
 ]
+
+[account.payment_card]
+bins = ["625817", "624441"]
+topup_enabled = true
+
+[account.purchase]
+enabled = true
+plan_name = "chatgptplusplan"
+currency = "KRW"
+promo_campaign_id = "plus-1-month-free"
+checkout_ui_mode = "custom"
+
+[account.purchase.billing]
+name = "Minjun Kim"
+country = "KR"
+address_line1 = "1 Teheran-ro, Gangnam-gu"
+address_state = "Seoul"
+postal_code = "06141"

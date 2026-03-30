@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,42 +46,56 @@ func TestValidAccountCount(t *testing.T) {
 	}
 }
 
-func TestResolveRegisterWorkers(t *testing.T) {
+func TestTopUpMissingAccountsNoop(t *testing.T) {
+	store := NewTokenStore()
+	if err := topUpMissingAccounts(context.Background(), store, t.TempDir(), 0, topUpOptions{}); err != nil {
+		t.Fatalf("topUpMissingAccounts() error = %v", err)
+	}
+}
+
+func TestTopUpAccountsDisabledNoop(t *testing.T) {
+	store := NewTokenStore()
+	if err := topUpAccounts(context.Background(), store, t.TempDir(), topUpOptions{
+		Enabled:     false,
+		TargetCount: 1,
+	}); err != nil {
+		t.Fatalf("topUpAccounts() error = %v", err)
+	}
+}
+
+func TestTopUpAccountsRejectsInvalidOptions(t *testing.T) {
 	tests := []struct {
 		name    string
-		workers int
-		want    int
+		opts    topUpOptions
+		wantErr string
 	}{
 		{
-			name:    "default when zero",
-			workers: 0,
-			want:    defaultRegisterWorkers,
+			name: "reject zero workers",
+			opts: topUpOptions{
+				Enabled:         true,
+				TargetCount:     1,
+				RegisterTimeout: time.Minute,
+			},
+			wantErr: "register workers must be positive",
 		},
 		{
-			name:    "default when negative",
-			workers: -3,
-			want:    defaultRegisterWorkers,
-		},
-		{
-			name:    "keep positive value",
-			workers: 9,
-			want:    9,
+			name: "reject zero timeout",
+			opts: topUpOptions{
+				Enabled:         true,
+				TargetCount:     1,
+				RegisterWorkers: 1,
+			},
+			wantErr: "register timeout must be positive",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := resolveRegisterWorkers(tt.workers); got != tt.want {
-				t.Fatalf("resolveRegisterWorkers() = %d, want %d", got, tt.want)
+			err := topUpAccounts(context.Background(), NewTokenStore(), t.TempDir(), tt.opts)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("topUpAccounts() error = %v, want contains %q", err, tt.wantErr)
 			}
 		})
-	}
-}
-
-func TestTopUpMissingAccountsNoop(t *testing.T) {
-	store := NewTokenStore()
-	if err := topUpMissingAccounts(context.Background(), store, t.TempDir(), 0, topUpOptions{}); err != nil {
-		t.Fatalf("topUpMissingAccounts() error = %v", err)
 	}
 }
 
@@ -103,15 +118,24 @@ func TestTopUpAccountsSerializesConcurrentRuns(t *testing.T) {
 			return plus.RegisterResult{}, err
 		}
 		filePath := filepath.Join(opts.DataDir, "demo@example.com.json")
-		if err := writeCredentialFileForTest(filePath, "access-token", "refresh-token", "account-1"); err != nil {
+		if err := writeSessionFileForTest(filePath, "access-token", "account-1", "demo@example.com", "plus"); err != nil {
 			return plus.RegisterResult{}, err
 		}
 		return plus.RegisterResult{
 			Email:     "demo@example.com",
 			AccountID: "account-1",
 			Tokens: plus.AuthTokens{
-				AccessToken:  "access-token",
-				RefreshToken: "refresh-token",
+				AccessToken: "access-token",
+			},
+			Session: plus.ChatGPTSession{
+				AccessToken: "access-token",
+				User: plus.ChatGPTSessionUser{
+					Email: "demo@example.com",
+				},
+				Account: plus.ChatGPTSessionAccount{
+					ID:       "account-1",
+					PlanType: "plus",
+				},
 			},
 			FilePath: filePath,
 		}, nil
@@ -120,11 +144,11 @@ func TestTopUpAccountsSerializesConcurrentRuns(t *testing.T) {
 	store := NewTokenStore()
 	errCh := make(chan error, 2)
 	go func() {
-		errCh <- topUpAccounts(context.Background(), store, dataDir, topUpOptions{TargetCount: 1, RegisterWorkers: 1})
+		errCh <- topUpAccounts(context.Background(), store, dataDir, topUpOptions{Enabled: true, TargetCount: 1, RegisterWorkers: 1, RegisterTimeout: time.Minute})
 	}()
 	<-started
 	go func() {
-		errCh <- topUpAccounts(context.Background(), store, dataDir, topUpOptions{TargetCount: 1, RegisterWorkers: 1})
+		errCh <- topUpAccounts(context.Background(), store, dataDir, topUpOptions{Enabled: true, TargetCount: 1, RegisterWorkers: 1, RegisterTimeout: time.Minute})
 	}()
 	close(release)
 
@@ -138,14 +162,25 @@ func TestTopUpAccountsSerializesConcurrentRuns(t *testing.T) {
 	}
 }
 
-func writeCredentialFileForTest(path string, accessToken string, refreshToken string, accountID string) error {
+func writeSessionFileForTest(path string, accessToken string, accountID string, email string, planType string) error {
 	payload := map[string]any{
+		"auth_mode":    "chatgpt",
 		"last_refresh": time.Now().UTC().Format(time.RFC3339Nano),
+		"created_at":   time.Now().UTC().Format(time.RFC3339Nano),
 		"tokens": map[string]string{
-			"access_token":  accessToken,
-			"refresh_token": refreshToken,
-			"account_id":    accountID,
+			"access_token": accessToken,
+			"account_id":   accountID,
 		},
+	}
+	if email != "" || planType != "" {
+		payload["session"] = map[string]any{
+			"user": map[string]string{
+				"email": email,
+			},
+			"account": map[string]string{
+				"planType": planType,
+			},
+		}
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

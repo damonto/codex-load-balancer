@@ -18,7 +18,7 @@ const (
 	refreshClientID      = "app_EMoamEEZ73f0CkXaXp7hrann"
 	refreshScope         = "openid profile email"
 	defaultRefreshWindow = 8 * 24 * time.Hour
-	defaultRefreshGap    = 30 * time.Second // prevent thundering herd on concurrent 401s
+	defaultRefreshGap    = 30 * time.Second
 )
 
 type refreshConfig struct {
@@ -73,7 +73,6 @@ type refreshResponse struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-// refreshHTTPClient is shared across all refresh calls to reuse TCP/TLS connections.
 var refreshHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
 func maybeRefreshToken(ctx context.Context, store *TokenStore, tokenID string, cfg refreshConfig) (bool, error) {
@@ -112,9 +111,6 @@ func maybeRefreshTokenWithMode(ctx context.Context, store *TokenStore, tokenID s
 	if refreshIfStale && !tokenNeedsRefresh(token.LastRefresh, time.Now(), cfg.Interval) {
 		return false, nil
 	}
-	// For forced refreshes (on 401): if another goroutine already refreshed
-	// within the debounce window, treat it as done to avoid hammering the auth
-	// endpoint with a thundering herd of concurrent 401 retries.
 	if !refreshIfStale && !token.LastRefresh.IsZero() && time.Since(token.LastRefresh) < cfg.Debounce {
 		return true, nil
 	}
@@ -171,7 +167,7 @@ func refreshAccessToken(ctx context.Context, refreshToken string) (string, strin
 	if resp.StatusCode == http.StatusUnauthorized {
 		return "", "", refreshTokenError{
 			permanent: true,
-			err:       fmt.Errorf("refresh token unauthorized"),
+			err:       errors.New("refresh token unauthorized"),
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -237,8 +233,6 @@ func updateAuthFileTokens(path string, accessToken string, refreshToken string) 
 	}
 	updated = append(updated, '\n')
 
-	// Write to a sibling temp file then rename atomically to avoid a corrupt
-	// auth file if the process is killed mid-write.
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".auth-update-*")
 	if err != nil {
 		return fmt.Errorf("create temp auth file: %w", err)

@@ -3,12 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,10 +15,18 @@ import (
 	"github.com/damonto/codex-load-balancer/plus"
 )
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
+func newIPv4TestServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
 
-func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return fn(req)
+	ts := httptest.NewUnstartedServer(handler)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp4: %v", err)
+	}
+	ts.Listener = listener
+	ts.Start()
+	t.Cleanup(ts.Close)
+	return ts
 }
 
 func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
@@ -88,7 +95,7 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 				PlanType:  tt.initialPlanType,
 			}, time.Now().UTC())
 
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
 					t.Fatalf("Authorization = %q, want %q", got, "Bearer access-token")
 				}
@@ -115,13 +122,12 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 					t.Fatalf("encode response: %v", err)
 				}
 			}))
-			defer ts.Close()
 
 			removed := syncOneToken(context.Background(), store, ts.Client(), ts.URL, TokenRef{
 				ID:        "active.json",
 				Token:     "access-token",
 				AccountID: "account-1",
-			})
+			}, true)
 			if removed {
 				t.Fatal("syncOneToken() should not remove token")
 			}
@@ -187,7 +193,7 @@ func TestRemoveTokenAfterUsageRemovalUnauthorized(t *testing.T) {
 			path := filepath.Join(t.TempDir(), tt.tokenID)
 
 			if tt.createFile {
-				if err := os.WriteFile(path, []byte(`{"tokens":{"access_token":"x"}}`), 0o644); err != nil {
+				if err := writeSessionFileForTest(path, "x", "account-1", "", "plus"); err != nil {
 					t.Fatalf("write token file: %v", err)
 				}
 			}
@@ -202,8 +208,8 @@ func TestRemoveTokenAfterUsageRemovalUnauthorized(t *testing.T) {
 				store.SetSession("session-1", tt.tokenID)
 			}
 
-			if got := removeTokenAfterUsageRemoval(store, tt.tokenID, "unauthorized"); got != tt.want {
-				t.Fatalf("removeTokenAfterUsageRemoval() = %v, want %v", got, tt.want)
+			if got := removeTokenAndFile(store, tt.tokenID, "unauthorized"); got != tt.want {
+				t.Fatalf("removeTokenAndFile() = %v, want %v", got, tt.want)
 			}
 
 			if _, ok := store.TokenSnapshot(tt.tokenID); ok {
@@ -227,7 +233,7 @@ func TestRemoveTokenAfterUsageRemovalUnauthorized(t *testing.T) {
 func TestSyncOneTokenRemovesFreePlan(t *testing.T) {
 	store := NewTokenStore()
 	path := filepath.Join(t.TempDir(), "active.json")
-	if err := os.WriteFile(path, []byte(`{"tokens":{"access_token":"x"}}`), 0o644); err != nil {
+	if err := writeSessionFileForTest(path, "x", "account-1", "", "plus"); err != nil {
 		t.Fatalf("write token file: %v", err)
 	}
 	store.UpsertToken(TokenState{
@@ -237,7 +243,7 @@ func TestSyncOneTokenRemovesFreePlan(t *testing.T) {
 		AccountID: "account-1",
 	}, time.Now().UTC())
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(rateLimitStatusPayload{
 			PlanType: "free",
@@ -248,13 +254,12 @@ func TestSyncOneTokenRemovesFreePlan(t *testing.T) {
 			t.Fatalf("encode response: %v", err)
 		}
 	}))
-	defer ts.Close()
 
 	removed := syncOneToken(context.Background(), store, ts.Client(), ts.URL, TokenRef{
 		ID:        "active.json",
 		Token:     "access-token",
 		AccountID: "account-1",
-	})
+	}, true)
 	if !removed {
 		t.Fatal("syncOneToken() should remove free-plan token")
 	}
@@ -266,91 +271,84 @@ func TestSyncOneTokenRemovesFreePlan(t *testing.T) {
 	}
 }
 
-func TestSyncOneTokenRefreshesUnauthorizedBeforeRemoval(t *testing.T) {
+func TestSyncOneTokenKeepsFreePlanWhenPurchaseDisabled(t *testing.T) {
+	store := NewTokenStore()
 	path := filepath.Join(t.TempDir(), "active.json")
-	if err := os.WriteFile(path, []byte(`{"last_refresh":"2026-01-01T00:00:00Z","tokens":{"access_token":"old-access","refresh_token":"refresh-token","account_id":"account-1"}}`), 0o644); err != nil {
+	if err := writeSessionFileForTest(path, "x", "account-1", "", "free"); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+	store.UpsertToken(TokenState{
+		ID:        "active.json",
+		Path:      path,
+		Token:     "access-token",
+		AccountID: "account-1",
+	}, time.Now().UTC())
+
+	ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(rateLimitStatusPayload{
+			PlanType: "free",
+			RateLimit: &rateLimitStatusDetails{
+				PrimaryWindow: &rateLimitWindowSnapshot{UsedPercent: 1, LimitWindowSeconds: 18000},
+			},
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+
+	removed := syncOneToken(context.Background(), store, ts.Client(), ts.URL, TokenRef{
+		ID:        "active.json",
+		Token:     "access-token",
+		AccountID: "account-1",
+	}, false)
+	if removed {
+		t.Fatal("syncOneToken() should keep free-plan token when purchase is disabled")
+	}
+	if _, ok := store.TokenSnapshot("active.json"); !ok {
+		t.Fatal("token should remain in store")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("token file should remain, stat err = %v", err)
+	}
+}
+
+func TestSyncOneTokenRemovesUnauthorizedToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "active.json")
+	if err := writeSessionFileForTest(path, "old-access", "account-1", "demo@example.com", "plus"); err != nil {
 		t.Fatalf("write token file: %v", err)
 	}
 
 	store := NewTokenStore()
 	store.UpsertToken(TokenState{
-		ID:           "active.json",
-		Path:         path,
-		Token:        "old-access",
-		AccountID:    "account-1",
-		RefreshToken: "refresh-token",
+		ID:        "active.json",
+		Path:      path,
+		Token:     "old-access",
+		AccountID: "account-1",
 	}, time.Now().UTC())
-
-	originalClient := refreshHTTPClient
-	t.Cleanup(func() { refreshHTTPClient = originalClient })
-	refreshHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.String() != refreshTokenURL {
-			t.Fatalf("refresh URL = %q, want %q", req.URL.String(), refreshTokenURL)
-		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(`{"access_token":"new-access","refresh_token":"new-refresh"}`)),
-		}, nil
-	})}
-
-	requestCount := 0
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		switch r.Header.Get("Authorization") {
-		case "Bearer old-access":
-			w.WriteHeader(http.StatusUnauthorized)
-		case "Bearer new-access":
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(rateLimitStatusPayload{
-				PlanType: "plus",
-				RateLimit: &rateLimitStatusDetails{
-					PrimaryWindow: &rateLimitWindowSnapshot{UsedPercent: 10, LimitWindowSeconds: 18000},
-				},
-			}); err != nil {
-				t.Fatalf("encode usage response: %v", err)
-			}
-		default:
-			t.Fatalf("unexpected Authorization header %q", r.Header.Get("Authorization"))
-		}
+	ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
 	}))
-	defer ts.Close()
 
 	removed := syncOneToken(context.Background(), store, ts.Client(), ts.URL, TokenRef{
 		ID:        "active.json",
 		Token:     "old-access",
 		AccountID: "account-1",
-	})
-	if removed {
-		t.Fatal("syncOneToken() should keep token after successful refresh")
+	}, true)
+	if !removed {
+		t.Fatal("syncOneToken() should remove unauthorized token")
 	}
-	if requestCount != 2 {
-		t.Fatalf("usage requests = %d, want %d", requestCount, 2)
+	if _, ok := store.TokenSnapshot("active.json"); ok {
+		t.Fatal("token should be removed from store")
 	}
-
-	token, ok := store.TokenSnapshot("active.json")
-	if !ok {
-		t.Fatal("token should remain in store")
-	}
-	if token.Token != "new-access" {
-		t.Fatalf("Token = %q, want %q", token.Token, "new-access")
-	}
-	if token.RefreshToken != "new-refresh" {
-		t.Fatalf("RefreshToken = %q, want %q", token.RefreshToken, "new-refresh")
-	}
-	updated, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read updated token file: %v", err)
-	}
-	if !strings.Contains(string(updated), "new-access") {
-		t.Fatalf("updated token file = %q, want new access token", string(updated))
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("token file should be removed, stat err = %v", err)
 	}
 }
 
 func TestSyncUsageOnceTopsUpRemovedFreePlanToken(t *testing.T) {
 	dataDir := t.TempDir()
 	path := filepath.Join(dataDir, "active.json")
-	if err := os.WriteFile(path, []byte(`{"tokens":{"access_token":"x"}}`), 0o644); err != nil {
+	if err := writeSessionFileForTest(path, "x", "account-1", "", "plus"); err != nil {
 		t.Fatalf("write token file: %v", err)
 	}
 
@@ -371,21 +369,30 @@ func TestSyncUsageOnceTopsUpRemovedFreePlanToken(t *testing.T) {
 	registerCodexCredential = func(ctx context.Context, opts plus.RegisterOptions) (plus.RegisterResult, error) {
 		registerCalls.Add(1)
 		filePath := filepath.Join(opts.DataDir, "new.json")
-		if err := writeCredentialFileForTest(filePath, "new-access", "new-refresh", "account-new"); err != nil {
+		if err := writeSessionFileForTest(filePath, "new-access", "account-new", "new@example.com", "plus"); err != nil {
 			return plus.RegisterResult{}, err
 		}
 		return plus.RegisterResult{
 			Email:     "new@example.com",
 			AccountID: "account-new",
 			Tokens: plus.AuthTokens{
-				AccessToken:  "new-access",
-				RefreshToken: "new-refresh",
+				AccessToken: "new-access",
+			},
+			Session: plus.ChatGPTSession{
+				AccessToken: "new-access",
+				User: plus.ChatGPTSessionUser{
+					Email: "new@example.com",
+				},
+				Account: plus.ChatGPTSessionAccount{
+					ID:       "account-new",
+					PlanType: "plus",
+				},
 			},
 			FilePath: filePath,
 		}, nil
 	}
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(rateLimitStatusPayload{
 			PlanType: "free",
@@ -396,14 +403,131 @@ func TestSyncUsageOnceTopsUpRemovedFreePlanToken(t *testing.T) {
 			t.Fatalf("encode response: %v", err)
 		}
 	}))
-	defer ts.Close()
 
-	syncUsageOnce(context.Background(), store, ts.Client(), dataDir, ts.URL, usageSyncOptions{Concurrency: 1}, topUpOptions{RegisterWorkers: 1})
+	syncUsageOnce(context.Background(), store, ts.Client(), dataDir, ts.URL, usageSyncOptions{Concurrency: 1}, topUpOptions{
+		Enabled:         true,
+		RegisterWorkers: 1,
+		RegisterTimeout: time.Minute,
+		PurchaseConfig: plus.PurchaseConfig{
+			Enabled: true,
+		},
+	})
 
 	if got := registerCalls.Load(); got != 1 {
 		t.Fatalf("register calls = %d, want %d", got, 1)
 	}
 	if _, ok := store.TokenSnapshot("active.json"); ok {
 		t.Fatal("free-plan token should be removed from store")
+	}
+}
+
+func TestSyncUsageOnceSkipsTopUpWhenDisabled(t *testing.T) {
+	dataDir := t.TempDir()
+	path := filepath.Join(dataDir, "active.json")
+	if err := writeSessionFileForTest(path, "x", "account-1", "", "plus"); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	store := NewTokenStore()
+	store.UpsertToken(TokenState{
+		ID:        "active.json",
+		Path:      path,
+		Token:     "access-token",
+		AccountID: "account-1",
+	}, time.Now().UTC())
+
+	var registerCalls atomic.Int32
+	originalRegister := registerCodexCredential
+	t.Cleanup(func() {
+		registerCodexCredential = originalRegister
+	})
+	registerCodexCredential = func(ctx context.Context, opts plus.RegisterOptions) (plus.RegisterResult, error) {
+		registerCalls.Add(1)
+		return plus.RegisterResult{}, nil
+	}
+
+	ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(rateLimitStatusPayload{
+			PlanType: "free",
+			RateLimit: &rateLimitStatusDetails{
+				PrimaryWindow: &rateLimitWindowSnapshot{UsedPercent: 1, LimitWindowSeconds: 18000},
+			},
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+
+	syncUsageOnce(context.Background(), store, ts.Client(), dataDir, ts.URL, usageSyncOptions{Concurrency: 1}, topUpOptions{
+		Enabled:         false,
+		RegisterWorkers: 1,
+		RegisterTimeout: time.Minute,
+		PurchaseConfig: plus.PurchaseConfig{
+			Enabled: true,
+		},
+	})
+
+	if got := registerCalls.Load(); got != 0 {
+		t.Fatalf("register calls = %d, want %d", got, 0)
+	}
+	if _, ok := store.TokenSnapshot("active.json"); ok {
+		t.Fatal("free-plan token should be removed from store")
+	}
+}
+
+func TestSyncUsageOnceKeepsFreePlanWhenPurchaseDisabled(t *testing.T) {
+	dataDir := t.TempDir()
+	path := filepath.Join(dataDir, "active.json")
+	if err := writeSessionFileForTest(path, "x", "account-1", "", "free"); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	store := NewTokenStore()
+	store.UpsertToken(TokenState{
+		ID:        "active.json",
+		Path:      path,
+		Token:     "access-token",
+		AccountID: "account-1",
+	}, time.Now().UTC())
+
+	var registerCalls atomic.Int32
+	originalRegister := registerCodexCredential
+	t.Cleanup(func() {
+		registerCodexCredential = originalRegister
+	})
+	registerCodexCredential = func(ctx context.Context, opts plus.RegisterOptions) (plus.RegisterResult, error) {
+		registerCalls.Add(1)
+		return plus.RegisterResult{}, nil
+	}
+
+	ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(rateLimitStatusPayload{
+			PlanType: "free",
+			RateLimit: &rateLimitStatusDetails{
+				PrimaryWindow: &rateLimitWindowSnapshot{UsedPercent: 1, LimitWindowSeconds: 18000},
+			},
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+
+	syncUsageOnce(context.Background(), store, ts.Client(), dataDir, ts.URL, usageSyncOptions{Concurrency: 1}, topUpOptions{
+		Enabled:         true,
+		RegisterWorkers: 1,
+		RegisterTimeout: time.Minute,
+		PurchaseConfig: plus.PurchaseConfig{
+			Enabled: false,
+		},
+	})
+
+	if got := registerCalls.Load(); got != 0 {
+		t.Fatalf("register calls = %d, want %d", got, 0)
+	}
+	if _, ok := store.TokenSnapshot("active.json"); !ok {
+		t.Fatal("free-plan token should remain in store")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("token file should remain, stat err = %v", err)
 	}
 }
