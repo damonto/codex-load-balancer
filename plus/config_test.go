@@ -101,7 +101,7 @@ func TestNormalizeOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "require purchase fields when enabled",
+			name: "allow incomplete purchase config when enabled",
 			opts: RegisterOptions{
 				DataDir:               "/tmp/data",
 				RegistrationProxyPool: RegistrationProxyPool{"http://proxy-a"},
@@ -109,7 +109,15 @@ func TestNormalizeOptions(t *testing.T) {
 					Enabled: true,
 				},
 			},
-			wantErr: "purchase plan name is empty",
+			want: RegisterOptions{
+				DataDir:               "/tmp/data",
+				OTPWait:               defaultOTPWait,
+				OTPPoll:               defaultOTPPoll,
+				RegistrationProxyPool: RegistrationProxyPool{"http://proxy-a"},
+				Purchase: PurchaseConfig{
+					Enabled: true,
+				},
+			},
 		},
 	}
 
@@ -149,12 +157,12 @@ func validPurchaseConfigForTest() PurchaseConfig {
 			Name:         "Minjun Kim",
 			Country:      "KR",
 			AddressLine1: "1 Teheran-ro, Gangnam-gu",
+			AddressCity:  "Seoul",
 			AddressState: "Seoul",
 			PostalCode:   "06141",
 		},
 		PaymentCard: PaymentCardConfig{
-			BINs:         []string{"625817", "624441"},
-			TopUpEnabled: true,
+			BINs: []string{"625817", "624441"},
 		},
 	}
 }

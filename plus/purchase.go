@@ -7,14 +7,9 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
-)
 
-const (
-	stripeBuildHash        = "f197c9c0f0"
-	stripeFingerprintBuild = "m-outer-3437aaddcdf6922d623e172c2d6f9278"
+	stripeflow "github.com/damonto/codex-load-balancer/plus/stripe"
 )
-
-const stripeFixedHash = "fidnandhYHdWcXxpYCc%2FJ2FgY2RwaXEnKSdpamZkaWAnPydgaycpJ3ZwZ3Zmd2x1cWxqa1BrbHRwYGtgdnZAa2RnaWBhJz9jZGl2YCknZHVsTmB8Jz8ndW5aaWxzYFowNE1Kd1ZyRjNtNGt9QmpMNmlRRGJXb1xTd38xYVA2Y1NKZGd8RmZOVzZ1Z0BPYnBGU0RpdEZ9YX1GUHNqV200XVJyV2RmU2xqc1A2bklOc3Vub20yTHRuUjU1bF1Udm9qNmsnKSdjd2poVmB3c2B3Jz9xd3BgKSdnZGZuYndqcGthRmppancnPycmY2NjY2NjJyknaWR8anBxUXx1YCc%2FJ3Zsa2JpYFpscWBoJyknYGtkZ2lgVWlkZmBtamlhYHd2Jz9xd3BgeCUl"
 
 type Purchase struct {
 	client  *client
@@ -36,46 +31,9 @@ type PurchaseBillingConfig struct {
 	Name         string
 	Country      string
 	AddressLine1 string
+	AddressCity  string
 	AddressState string
 	PostalCode   string
-}
-
-type stripeFingerprint struct {
-	GUID string `json:"guid"`
-	MUID string `json:"muid"`
-	SID  string `json:"sid"`
-}
-
-type fingerprintRequest struct {
-	V string `json:"v"`
-	T int    `json:"t"`
-}
-
-type paymentMethodResponse struct {
-	ID string `json:"id"`
-}
-
-type paymentPageInitResponse struct {
-	EID          string `json:"eid"`
-	InitChecksum string `json:"init_checksum"`
-	TotalSummary struct {
-		Due int `json:"due"`
-	} `json:"total_summary"`
-	TaxMeta struct {
-		Status string `json:"status"`
-	} `json:"tax_meta"`
-	TaxContext struct {
-		AutomaticTaxEnabled bool `json:"automatic_tax_enabled"`
-	} `json:"tax_context"`
-}
-
-type paymentPageConfirmResponse struct {
-	Status        string `json:"status"`
-	ClientSecret  string `json:"client_secret"`
-	PaymentIntent struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
-	} `json:"payment_intent"`
 }
 
 type checkoutRequest struct {
@@ -102,68 +60,7 @@ type checkoutResponse struct {
 }
 
 func (c checkoutResponse) String() string {
-	return fmt.Sprintf(
-		"https://checkout.stripe.com/c/pay/%s#%s",
-		c.CheckoutSessionID,
-		stripeFixedHash,
-	)
-}
-
-type PaymentBilling struct {
-	Name         string
-	Email        string
-	Country      string
-	AddressLine1 string
-	AddressState string
-	PostalCode   string
-}
-
-func ValidatePurchaseConfig(cfg PurchaseConfig) (PurchaseConfig, error) {
-	if !cfg.Enabled {
-		return cfg, nil
-	}
-	cfg.PlanName = strings.TrimSpace(cfg.PlanName)
-	if cfg.PlanName == "" {
-		return PurchaseConfig{}, errors.New("purchase plan name is empty")
-	}
-	cfg.Currency = strings.TrimSpace(cfg.Currency)
-	if cfg.Currency == "" {
-		return PurchaseConfig{}, errors.New("purchase currency is empty")
-	}
-	cfg.PromoCampaignID = strings.TrimSpace(cfg.PromoCampaignID)
-	if cfg.PromoCampaignID == "" {
-		return PurchaseConfig{}, errors.New("purchase promo campaign id is empty")
-	}
-	cfg.CheckoutUIMode = strings.TrimSpace(cfg.CheckoutUIMode)
-	if cfg.CheckoutUIMode == "" {
-		return PurchaseConfig{}, errors.New("purchase checkout ui mode is empty")
-	}
-	cfg.Billing.Name = strings.TrimSpace(cfg.Billing.Name)
-	if cfg.Billing.Name == "" {
-		return PurchaseConfig{}, errors.New("purchase billing name is empty")
-	}
-	cfg.Billing.Country = strings.TrimSpace(cfg.Billing.Country)
-	if cfg.Billing.Country == "" {
-		return PurchaseConfig{}, errors.New("purchase billing country is empty")
-	}
-	cfg.Billing.AddressLine1 = strings.TrimSpace(cfg.Billing.AddressLine1)
-	if cfg.Billing.AddressLine1 == "" {
-		return PurchaseConfig{}, errors.New("purchase billing address line1 is empty")
-	}
-	cfg.Billing.AddressState = strings.TrimSpace(cfg.Billing.AddressState)
-	if cfg.Billing.AddressState == "" {
-		return PurchaseConfig{}, errors.New("purchase billing address state is empty")
-	}
-	cfg.Billing.PostalCode = strings.TrimSpace(cfg.Billing.PostalCode)
-	if cfg.Billing.PostalCode == "" {
-		return PurchaseConfig{}, errors.New("purchase billing postal code is empty")
-	}
-	paymentCard, err := normalizePaymentCardConfig(cfg.PaymentCard)
-	if err != nil {
-		return PurchaseConfig{}, fmt.Errorf("normalize payment card config: %w", err)
-	}
-	cfg.PaymentCard = paymentCard
-	return cfg, nil
+	return stripeflow.Checkout{SessionID: c.CheckoutSessionID}.URL()
 }
 
 func NewPurchase(client *client, session ChatGPTSession, cfg PurchaseConfig) *Purchase {
@@ -179,25 +76,59 @@ func (p *Purchase) Checkout(ctx context.Context) error {
 		return nil
 	}
 
+	slog.Info(
+		"purchase checkout started",
+		"email", p.session.User.Email,
+		"plan", p.cfg.PlanName,
+		"currency", p.cfg.Currency,
+		"checkout_ui_mode", p.cfg.CheckoutUIMode,
+	)
 	checkout, err := p.requestCheckoutURL(ctx)
 	if err != nil {
+		slog.Warn("purchase checkout request failed", "email", p.session.User.Email, "err", err)
 		return fmt.Errorf("request plus checkout: %w", err)
 	}
-	slog.Info("checkout", "email", p.session.User.Email, "checkout_url", checkout)
-
+	slog.Info(
+		"purchase checkout session ready",
+		"email", p.session.User.Email,
+		"checkout_session", shortPurchaseID(checkout.CheckoutSessionID),
+	)
 	var lastErr error
-	for range 10 {
+	for attempt := range 10 {
+		slog.Info(
+			"purchase payment attempt started",
+			"email", p.session.User.Email,
+			"attempt", attempt+1,
+			"max_attempts", 10,
+		)
 		if err := p.pay(ctx, checkout); err != nil {
 			lastErr = err
-			slog.Error("checkout failed", "email", p.session.User.Email, "err", err)
+			slog.Warn(
+				"purchase payment attempt failed",
+				"email", p.session.User.Email,
+				"attempt", attempt+1,
+				"err", err,
+			)
 			continue
 		}
+		slog.Info(
+			"purchase completed",
+			"email", p.session.User.Email,
+			"attempt", attempt+1,
+		)
 		return nil
 	}
+	slog.Error("purchase failed after retries", "email", p.session.User.Email, "attempts", 10, "err", lastErr)
 	return lastErr
 }
 
 func (p *Purchase) requestCheckoutURL(ctx context.Context) (checkoutResponse, error) {
+	slog.Info(
+		"requesting plus checkout url",
+		"email", p.session.User.Email,
+		"plan", p.cfg.PlanName,
+		"currency", p.cfg.Currency,
+	)
 	request := checkoutRequest{
 		PlanName: p.cfg.PlanName,
 		BillingDetails: checkoutBillingDetails{
@@ -218,154 +149,126 @@ func (p *Purchase) requestCheckoutURL(ctx context.Context) (checkoutResponse, er
 	if err != nil {
 		return checkoutResponse{}, fmt.Errorf("post checkout request: %w", err)
 	}
+	slog.Info(
+		"plus checkout url received",
+		"email", p.session.User.Email,
+		"checkout_session", shortPurchaseID(response.CheckoutSessionID),
+		"has_publishable_key", strings.TrimSpace(response.PublishableKey) != "",
+	)
 	return response, nil
 }
 
 func (p *Purchase) pay(ctx context.Context, checkout checkoutResponse) error {
-	fingerprint, err := p.fetchStripeFingerprint(ctx)
-	if err != nil {
-		return fmt.Errorf("fetch stripe fingerprint: %w", err)
-	}
-
-	billing := PaymentBilling{
+	billing := stripeflow.Billing{
 		Name:         p.cfg.Billing.Name,
 		Email:        strings.TrimSpace(p.session.User.Email),
 		Country:      p.cfg.Billing.Country,
 		AddressLine1: p.cfg.Billing.AddressLine1,
+		AddressCity:  p.cfg.Billing.AddressCity,
 		AddressState: p.cfg.Billing.AddressState,
 		PostalCode:   p.cfg.Billing.PostalCode,
 	}
 
-	card := randomCard(p.cfg.PaymentCard)
-	paymentMethod, err := p.createPaymentMethod(ctx, checkout, billing, card, fingerprint)
+	card, err := randomCard(p.cfg.PaymentCard)
 	if err != nil {
-		return fmt.Errorf("create payment method for %s: %w", card.Number, err)
+		return fmt.Errorf("pick payment card: %w", err)
 	}
-	slog.Info("stripe payment method", "email", p.session.User.Email, "card_number", card.Number, "payment_method", paymentMethod)
+	slog.Info(
+		"purchase card selected",
+		"email", p.session.User.Email,
+		"checkout_session", shortPurchaseID(checkout.CheckoutSessionID),
+		"billing_country", billing.Country,
+		"card_number", card.Number,
+		"card_last4", last4(card.Number),
+	)
+	processor := stripeflow.NewProcessor(
+		stripeHTTPClient{raw: p.client},
+		stripeflow.Checkout{
+			SessionID:      checkout.CheckoutSessionID,
+			PublishableKey: checkout.PublishableKey,
+		},
+		p.cfg.Currency,
+		chromeUserAgent,
+	)
+	slog.Info(
+		"stripe processor started",
+		"email", p.session.User.Email,
+		"checkout_session", shortPurchaseID(checkout.CheckoutSessionID),
+	)
+	if err := processor.Pay(ctx, billing, stripeflow.Card{
+		Number:   card.Number,
+		CVC:      card.CVC,
+		ExpMonth: card.ExpMonth,
+		ExpYear:  card.ExpYear,
+	}); err != nil {
+		return fmt.Errorf("stripe checkout flow: %w", err)
+	}
+	slog.Info(
+		"stripe processor completed",
+		"email", p.session.User.Email,
+		"checkout_session", shortPurchaseID(checkout.CheckoutSessionID),
+	)
+	return nil
+}
 
-	paymentPageResp, err := p.fetchPaymentPageDetails(ctx, checkout)
-	if err != nil {
-		return fmt.Errorf("fetch payment page details for %s: %w", card.Number, err)
-	}
+type stripeHTTPClient struct {
+	raw *client
+}
 
-	result, err := p.confirmPayment(ctx, checkout, paymentMethod, fingerprint, paymentPageResp)
+func (c stripeHTTPClient) GetJSON(ctx context.Context, target string, headers map[string]string, out any) error {
+	return convertStripeError(c.raw.GetJSON(ctx, target, headers, out))
+}
+
+func (c stripeHTTPClient) PostForm(ctx context.Context, target string, headers map[string]string, values url.Values, out any) error {
+	return convertStripeError(c.raw.PostForm(ctx, target, headers, values, out))
+}
+
+func (c stripeHTTPClient) PostRawJSON(ctx context.Context, target string, headers map[string]string, body string, contentType string, out any) error {
+	resp, err := c.raw.Post(ctx, target, headers, strings.NewReader(body), contentType)
 	if err != nil {
-		return fmt.Errorf("confirm payment for %s %w", card.Number, err)
+		return convertStripeError(err)
 	}
-	if paymentSucceeded(result) {
-		slog.Info("stripe payment confirmed", "email", p.session.User.Email, "card_number", card.Number, "payment_method", paymentMethod)
+	defer resp.Body.Close()
+
+	if err := expectStatus(resp, 200); err != nil {
+		return convertStripeError(err)
+	}
+	if err := decodeJSON(resp.Body, out); err != nil {
+		return err
+	}
+	return nil
+}
+
+func convertStripeError(err error) error {
+	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("payment for %s returned status %q / %q", card.Number, result.Status, result.PaymentIntent.Status)
+
+	var responseErr responseError
+	if errors.As(err, &responseErr) {
+		return stripeflow.ResponseError{
+			StatusCode: responseErr.StatusCode,
+			Body:       responseErr.Body,
+		}
+	}
+	return err
 }
 
-func (p *Purchase) fetchStripeFingerprint(ctx context.Context) (stripeFingerprint, error) {
-	headers := map[string]string{
-		"Accept":  "*/*",
-		"Origin":  "https://m.stripe.network",
-		"Referer": "https://m.stripe.network/",
+func shortPurchaseID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
 	}
-	var fingerprint stripeFingerprint
-	err := p.client.PostJSON(ctx, "https://m.stripe.com/6", headers, fingerprintRequest{
-		V: stripeFingerprintBuild,
-		T: 0,
-	}, &fingerprint)
-	if err == nil && fingerprint.GUID != "" {
-		return fingerprint, nil
+	if len(value) <= 8 {
+		return value
 	}
-	if err != nil {
-		return stripeFingerprint{}, err
-	}
-	return stripeFingerprint{}, errors.New("stripe fingerprint guid is empty")
+	return value[:4] + "..." + value[len(value)-4:]
 }
 
-func (p *Purchase) createPaymentMethod(ctx context.Context, checkout checkoutResponse, billing PaymentBilling, card PaymentCard, fingerprint stripeFingerprint) (string, error) {
-	form := url.Values{
-		"type":                                  {"card"},
-		"card[number]":                          {card.Number},
-		"card[cvc]":                             {card.CVC},
-		"card[exp_month]":                       {card.ExpMonth},
-		"card[exp_year]":                        {card.ExpYear},
-		"billing_details[name]":                 {billing.Name},
-		"billing_details[email]":                {billing.Email},
-		"billing_details[address][country]":     {billing.Country},
-		"billing_details[address][line1]":       {billing.AddressLine1},
-		"billing_details[address][state]":       {billing.AddressState},
-		"billing_details[address][postal_code]": {billing.PostalCode},
-		"allow_redisplay":                       {"always"},
-		"guid":                                  {fingerprint.GUID},
-		"muid":                                  {fingerprint.MUID},
-		"sid":                                   {fingerprint.SID},
-		"payment_user_agent":                    {fmt.Sprintf("stripe.js/%s; stripe-js-v3/%s; checkout", stripeBuildHash, stripeBuildHash)},
+func last4(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 4 {
+		return value
 	}
-
-	var payload paymentMethodResponse
-	if err := p.client.PostForm(ctx, "https://api.stripe.com/v1/payment_methods", stripeHeaders(checkout.PublishableKey), form, &payload); err != nil {
-		return "", err
-	}
-	if payload.ID == "" {
-		return "", errors.New("payment method id is empty")
-	}
-	return payload.ID, nil
-}
-
-func (p *Purchase) fetchPaymentPageDetails(ctx context.Context, checkout checkoutResponse) (paymentPageInitResponse, error) {
-	form := url.Values{
-		"key":            {checkout.PublishableKey},
-		"browser_locale": {"en"},
-	}
-
-	var payload paymentPageInitResponse
-	if err := p.client.PostForm(ctx, "https://api.stripe.com/v1/payment_pages/"+checkout.CheckoutSessionID+"/init", stripeHeaders(checkout.PublishableKey), form, &payload); err != nil {
-		return paymentPageInitResponse{}, err
-	}
-	return payload, nil
-}
-
-func (p *Purchase) confirmPayment(ctx context.Context, checkout checkoutResponse, paymentMethod string, fingerprint stripeFingerprint, paymentPageResp paymentPageInitResponse) (paymentPageConfirmResponse, error) {
-	form := url.Values{
-		"payment_method":  {paymentMethod},
-		"guid":            {fingerprint.GUID},
-		"muid":            {fingerprint.MUID},
-		"sid":             {fingerprint.SID},
-		"expected_amount": {"0"},
-		"key":             {checkout.PublishableKey},
-	}
-	if paymentPageResp.EID != "" {
-		form.Set("eid", paymentPageResp.EID)
-	}
-	if paymentPageResp.InitChecksum != "" {
-		form.Set("init_checksum", paymentPageResp.InitChecksum)
-	}
-
-	var payload paymentPageConfirmResponse
-	if err := p.client.PostForm(ctx, "https://api.stripe.com/v1/payment_pages/"+checkout.CheckoutSessionID+"/confirm", stripeHeaders(checkout.PublishableKey), form, &payload); err != nil {
-		return paymentPageConfirmResponse{}, err
-	}
-	return payload, nil
-}
-
-func stripeHeaders(publishableKey string) map[string]string {
-	return map[string]string{
-		"Authorization": fmt.Sprintf("Bearer %s", publishableKey),
-		"Content-Type":  "application/x-www-form-urlencoded",
-		"Accept":        "application/json",
-		"Origin":        "https://js.stripe.com",
-		"Referer":       "https://js.stripe.com/",
-	}
-}
-
-func paymentSucceeded(payload paymentPageConfirmResponse) bool {
-	if payload.Status == "complete" || payload.Status == "succeeded" {
-		return true
-	}
-	if payload.Status == "open" && payload.PaymentIntent.Status == "succeeded" {
-		return true
-	}
-	switch payload.PaymentIntent.Status {
-	case "succeeded", "processing":
-		return true
-	default:
-		return false
-	}
+	return value[len(value)-4:]
 }

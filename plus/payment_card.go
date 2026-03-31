@@ -10,8 +10,7 @@ import (
 const paymentCardNumberLength = 16
 
 type PaymentCardConfig struct {
-	BINs         []string
-	TopUpEnabled bool
+	BINs []string
 }
 
 type PaymentCard struct {
@@ -21,35 +20,22 @@ type PaymentCard struct {
 	ExpYear  string
 }
 
-func normalizePaymentCardConfig(cfg PaymentCardConfig) (PaymentCardConfig, error) {
-	cleanBINs := make([]string, 0, len(cfg.BINs))
-	for _, bin := range cfg.BINs {
-		bin = strings.TrimSpace(bin)
-		if bin == "" {
-			continue
-		}
-		if strings.IndexFunc(bin, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
-			return PaymentCardConfig{}, fmt.Errorf("payment card bin %q must contain only digits", bin)
-		}
-		if cfg.TopUpEnabled {
-			if len(bin) >= paymentCardNumberLength {
-				return PaymentCardConfig{}, fmt.Errorf("payment card bin %q is too long", bin)
-			}
-		} else if len(bin) != paymentCardNumberLength {
-			return PaymentCardConfig{}, fmt.Errorf("payment card number %q must be %d digits when topup is disabled", bin, paymentCardNumberLength)
-		}
-		cleanBINs = append(cleanBINs, bin)
+func randomCard(cfg PaymentCardConfig) (PaymentCard, error) {
+	if len(cfg.BINs) == 0 {
+		return PaymentCard{}, errors.New("payment card bins are empty")
 	}
-	if len(cleanBINs) == 0 {
-		return PaymentCardConfig{}, errors.New("payment card bins are empty")
+	entry := cfg.BINs[randv2.N(len(cfg.BINs))]
+	if entry == "" {
+		return PaymentCard{}, errors.New("payment card entry is empty")
 	}
-	cfg.BINs = cleanBINs
-	return cfg, nil
-}
-
-func randomCard(cfg PaymentCardConfig) PaymentCard {
-	number := cfg.BINs[randv2.N(len(cfg.BINs))]
-	if cfg.TopUpEnabled {
+	if strings.IndexFunc(entry, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+		return PaymentCard{}, fmt.Errorf("payment card entry %q must contain only digits", entry)
+	}
+	if len(entry) > paymentCardNumberLength {
+		return PaymentCard{}, fmt.Errorf("payment card entry %q is too long", entry)
+	}
+	number := entry
+	if len(number) < paymentCardNumberLength {
 		number = generatePaymentCardNumber(number)
 	}
 	return PaymentCard{
@@ -57,7 +43,7 @@ func randomCard(cfg PaymentCardConfig) PaymentCard {
 		CVC:      fmt.Sprintf("%03d", randv2.N(1000)),
 		ExpMonth: fmt.Sprintf("%02d", 1+randv2.N(12)),
 		ExpYear:  fmt.Sprintf("%02d", 30+randv2.N(10)),
-	}
+	}, nil
 }
 
 func generatePaymentCardNumber(bin string) string {

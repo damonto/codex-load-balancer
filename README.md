@@ -48,8 +48,7 @@ Startup flag:
 - `sync.usage_sync_interval_seconds` (required): Usage sync interval.
 - `sync.usage_sync_concurrency` (required): Usage sync concurrency.
 - `account.registration_proxy_pool` (required): Registration proxy pool for account top-up.
-- `account.payment_card.bins` (required when `top_up.enabled=true` and `account.purchase.enabled=true`): Card prefixes when `topup_enabled=true`, or full 16-digit card numbers when `topup_enabled=false`.
-- `account.payment_card.topup_enabled` (required when `top_up.enabled=true` and `account.purchase.enabled=true`): Whether to expand each configured `bins` entry into a random 16-digit card number.
+- `account.payment_card.bins` (required when `top_up.enabled=true` and `account.purchase.enabled=true`): Card BIN prefixes or full 16-digit card numbers. Prefixes are expanded into valid card numbers automatically.
 - `account.purchase.enabled` (required): Whether account registration should run the purchase step.
 - `account.purchase.*` (required when `top_up.enabled=true` and `account.purchase.enabled=true`): Checkout and billing fields used during account purchase.
 
@@ -79,7 +78,6 @@ registration_proxy_pool = [
 
 [account.payment_card]
 bins = ["625817", "624441"]
-topup_enabled = true
 
 [account.purchase]
 enabled = true
@@ -92,6 +90,7 @@ checkout_ui_mode = "custom"
 name = "Minjun Kim"
 country = "KR"
 address_line1 = "1 Teheran-ro, Gangnam-gu"
+address_city = "Seoul"
 address_state = "Seoul"
 postal_code = "06141"
 ```
@@ -101,11 +100,11 @@ Notes:
 - Unknown config keys cause startup failure.
 - `top_up.enabled = false` disables both startup top-up and replacement account registration after `401` / downgraded accounts are removed.
 - `account.registration_proxy_pool` must contain at least one non-empty proxy URL.
-- When `top_up.enabled = true` and `account.purchase.enabled = true`, missing payment card fields or any required purchase/billing field causes startup failure.
+- When `top_up.enabled = true` and `account.purchase.enabled = true`, purchase and payment card fields are passed through as configured; bad values fail during the purchase flow instead of at startup.
 - When `account.purchase.enabled = false`, registration skips the purchase step, still completes Codex OAuth, writes the Codex credential JSON, and usage sync no longer removes accounts just because `plan_type=free`.
 - If a proxy entry contains `%s`, each registration attempt replaces it with a fresh random `session_id`.
-- When `account.payment_card.topup_enabled = true`, payment card numbers are generated as 16 digits; the random middle digits are inferred automatically from the BIN length before appending the final Luhn digit.
-- When `account.payment_card.topup_enabled = false`, each `account.payment_card.bins` entry must already be a full 16-digit card number.
+- When an `account.payment_card.bins` entry is shorter than 16 digits, Codex load balancer treats it as a BIN prefix, fills the middle digits randomly, and appends the final Luhn digit automatically.
+- When an `account.payment_card.bins` entry is exactly 16 digits, Codex load balancer uses it as-is.
 
 ## Token File Format
 

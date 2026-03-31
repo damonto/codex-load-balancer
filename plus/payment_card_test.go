@@ -2,6 +2,7 @@ package plus
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -25,101 +26,73 @@ func TestLuhnCheckDigit(t *testing.T) {
 	}
 }
 
-func TestNormalizePaymentCardConfig(t *testing.T) {
+func TestRandomCard(t *testing.T) {
 	tests := []struct {
 		name    string
 		cfg     PaymentCardConfig
-		want    PaymentCardConfig
 		wantErr string
 	}{
 		{
-			name: "trim bins",
-			cfg: PaymentCardConfig{
-				BINs:         []string{" 625817 ", "", "624441"},
-				TopUpEnabled: true,
-			},
-			want: PaymentCardConfig{
-				BINs:         []string{"625817", "624441"},
-				TopUpEnabled: true,
-			},
-		},
-		{
-			name: "reject empty bins",
-			cfg: PaymentCardConfig{
-				BINs:         []string{" ", "\t"},
-				TopUpEnabled: true,
-			},
+			name:    "reject empty bins",
+			cfg:     PaymentCardConfig{},
 			wantErr: "payment card bins are empty",
 		},
 		{
-			name: "reject non-digit bin",
+			name: "reject empty entry",
 			cfg: PaymentCardConfig{
-				BINs:         []string{"6258ab"},
-				TopUpEnabled: true,
+				BINs: []string{""},
 			},
-			wantErr: `payment card bin "6258ab" must contain only digits`,
+			wantErr: "payment card entry is empty",
 		},
 		{
-			name: "reject too long bin",
+			name: "reject non-digit entry",
 			cfg: PaymentCardConfig{
-				BINs:         []string{"1234567890123456"},
-				TopUpEnabled: true,
+				BINs: []string{"6258ab"},
 			},
-			wantErr: `payment card bin "1234567890123456" is too long`,
+			wantErr: `payment card entry "6258ab" must contain only digits`,
 		},
 		{
-			name: "reject short full number when topup disabled",
+			name: "reject too long entry",
+			cfg: PaymentCardConfig{
+				BINs: []string{"12345678901234567"},
+			},
+			wantErr: `payment card entry "12345678901234567" is too long`,
+		},
+		{
+			name: "random card expands bin prefix",
 			cfg: PaymentCardConfig{
 				BINs: []string{"625817"},
 			},
-			wantErr: `payment card number "625817" must be 16 digits when topup is disabled`,
+		},
+		{
+			name: "random card keeps provided full number",
+			cfg:  PaymentCardConfig{BINs: []string{"6258171234567894"}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := normalizePaymentCardConfig(tt.cfg)
+			card, err := randomCard(tt.cfg)
 			if tt.wantErr != "" {
 				if err == nil {
-					t.Fatalf("normalizePaymentCardConfig() error = nil, want %q", tt.wantErr)
+					t.Fatalf("randomCard() error = nil, want %q", tt.wantErr)
 				}
 				if err.Error() != tt.wantErr {
-					t.Fatalf("normalizePaymentCardConfig() error = %q, want %q", err.Error(), tt.wantErr)
+					t.Fatalf("randomCard() error = %q, want %q", err.Error(), tt.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("normalizePaymentCardConfig() error = %v", err)
+				t.Fatalf("randomCard() error = %v", err)
 			}
-			if !slices.Equal(got.BINs, tt.want.BINs) {
-				t.Fatalf("BINs = %v, want %v", got.BINs, tt.want.BINs)
-			}
-		})
-	}
-}
-
-func TestRandomCard(t *testing.T) {
-	tests := []struct {
-		name string
-		cfg  PaymentCardConfig
-	}{
-		{name: "random card is valid", cfg: PaymentCardConfig{BINs: []string{"625817", "624441"}, TopUpEnabled: true}},
-		{name: "random card uses provided full number when topup disabled", cfg: PaymentCardConfig{BINs: []string{"6258171234567894"}}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			card := randomCard(tt.cfg)
 
 			if len(card.Number) != 16 {
 				t.Fatalf("len(card.Number) = %d, want 16", len(card.Number))
 			}
-			if tt.cfg.TopUpEnabled {
-				if !slices.Contains(tt.cfg.BINs, card.Number[:6]) {
-					t.Fatalf("card.Number prefix = %q, want one of %v", card.Number[:6], tt.cfg.BINs)
-				}
-			} else if !slices.Contains(tt.cfg.BINs, card.Number) {
-				t.Fatalf("card.Number = %q, want one of %v", card.Number, tt.cfg.BINs)
+			if !slices.Contains(tt.cfg.BINs, card.Number) && !slices.ContainsFunc(tt.cfg.BINs, func(bin string) bool {
+				return len(bin) < paymentCardNumberLength && strings.HasPrefix(card.Number, bin)
+			}) {
+				t.Fatalf("card.Number = %q, want exact match or prefix from %v", card.Number, tt.cfg.BINs)
 			}
 			if got, want := len(card.CVC), 3; got != want {
 				t.Fatalf("len(card.CVC) = %d, want %d", got, want)

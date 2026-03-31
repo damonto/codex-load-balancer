@@ -21,11 +21,6 @@ func normalizeOptions(opts RegisterOptions) (RegisterOptions, error) {
 	if len(opts.RegistrationProxyPool) == 0 {
 		return RegisterOptions{}, errors.New("proxy pool is empty")
 	}
-	purchase, err := ValidatePurchaseConfig(opts.Purchase)
-	if err != nil {
-		return RegisterOptions{}, fmt.Errorf("validate purchase config: %w", err)
-	}
-	opts.Purchase = purchase
 	return opts, nil
 }
 

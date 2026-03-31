@@ -76,9 +76,9 @@ func (r *registrationFlow) completeRegistrationFlow(ctx context.Context) (ChatGP
 	}
 	slog.Info("signup password submitted", "email", r.email)
 
-	otpCursor, err := latestEmailCursorWithContext(ctx, r.email)
+	previousOTPEmail, err := latestEmailFingerprintWithContext(ctx, r.email)
 	if err != nil {
-		return ChatGPTSession{}, fmt.Errorf("load registration otp cursor: %w", err)
+		return ChatGPTSession{}, fmt.Errorf("load latest registration email: %w", err)
 	}
 
 	if err := r.sendVerificationEmailRegistered(ctx); err != nil {
@@ -86,7 +86,7 @@ func (r *registrationFlow) completeRegistrationFlow(ctx context.Context) (ChatGP
 	}
 	slog.Info("otp email requested", "email", r.email)
 
-	otp, err := r.waitOTP(ctx, otpCursor)
+	otp, err := r.waitOTP(ctx, previousOTPEmail)
 	if err != nil {
 		return ChatGPTSession{}, fmt.Errorf("read registration otp: %w", err)
 	}
@@ -122,9 +122,9 @@ func (r *registrationFlow) completeCodexLoginFlow(ctx context.Context) (AuthToke
 	}
 	slog.Info("codex oauth authorize page opened", "email", r.email, "landing_url", landingURL)
 
-	otpCursor, err := latestEmailCursorWithContext(ctx, r.email)
+	previousOTPEmail, err := latestEmailFingerprintWithContext(ctx, r.email)
 	if err != nil {
-		return AuthTokens{}, "", fmt.Errorf("load codex login otp cursor: %w", err)
+		return AuthTokens{}, "", fmt.Errorf("load latest codex login email: %w", err)
 	}
 
 	pageType, err := r.submitEmailForCodex(ctx)
@@ -139,7 +139,7 @@ func (r *registrationFlow) completeCodexLoginFlow(ctx context.Context) (AuthToke
 	}
 
 	if pageType == authPageTypeEmailOTPVerification {
-		otpCode, err := r.waitOTP(ctx, otpCursor)
+		otpCode, err := r.waitOTP(ctx, previousOTPEmail)
 		if err != nil {
 			return AuthTokens{}, "", fmt.Errorf("read codex login otp: %w", err)
 		}

@@ -59,8 +59,7 @@ type fileAccountConfig struct {
 }
 
 type filePaymentCardConfig struct {
-	BINs         []string `toml:"bins"`
-	TopUpEnabled *bool    `toml:"topup_enabled"`
+	BINs []string `toml:"bins"`
 }
 
 type filePurchaseConfig struct {
@@ -76,6 +75,7 @@ type filePurchaseBilling struct {
 	Name         string `toml:"name"`
 	Country      string `toml:"country"`
 	AddressLine1 string `toml:"address_line1"`
+	AddressCity  string `toml:"address_city"`
 	AddressState string `toml:"address_state"`
 	PostalCode   string `toml:"postal_code"`
 }
@@ -118,9 +118,6 @@ func loadAppConfigFile(path string) (appConfig, error) {
 	if fc.Account.Purchase.Enabled == nil {
 		return appConfig{}, errors.New("account.purchase.enabled is required")
 	}
-	if *fc.TopUp.Enabled && *fc.Account.Purchase.Enabled && fc.Account.PaymentCard.TopUpEnabled == nil {
-		return appConfig{}, errors.New("account.payment_card.topup_enabled is required")
-	}
 
 	cfg := appConfig{
 		apiKey:             fc.APIKey,
@@ -136,16 +133,16 @@ func loadAppConfigFile(path string) (appConfig, error) {
 			Currency:        fc.Account.Purchase.Currency,
 			PromoCampaignID: fc.Account.Purchase.PromoCampaignID,
 			CheckoutUIMode:  fc.Account.Purchase.CheckoutUIMode,
-			Billing: plus.PurchaseBillingConfig{
-				Name:         fc.Account.Purchase.Billing.Name,
-				Country:      fc.Account.Purchase.Billing.Country,
-				AddressLine1: fc.Account.Purchase.Billing.AddressLine1,
+				Billing: plus.PurchaseBillingConfig{
+					Name:         fc.Account.Purchase.Billing.Name,
+					Country:      fc.Account.Purchase.Billing.Country,
+					AddressLine1: fc.Account.Purchase.Billing.AddressLine1,
+					AddressCity:  fc.Account.Purchase.Billing.AddressCity,
 				AddressState: fc.Account.Purchase.Billing.AddressState,
 				PostalCode:   fc.Account.Purchase.Billing.PostalCode,
 			},
 			PaymentCard: plus.PaymentCardConfig{
-				BINs:         fc.Account.PaymentCard.BINs,
-				TopUpEnabled: fc.Account.PaymentCard.TopUpEnabled != nil && *fc.Account.PaymentCard.TopUpEnabled,
+				BINs: fc.Account.PaymentCard.BINs,
 			},
 		},
 		syncInterval:    time.Duration(*fc.Sync.UsageSyncIntervalSeconds) * time.Second,
@@ -172,13 +169,6 @@ func loadAppConfigFile(path string) (appConfig, error) {
 	cfg.proxyPool, err = normalizeProxyPool(fc.Account.RegistrationProxyPool)
 	if err != nil {
 		return appConfig{}, err
-	}
-	if cfg.topUpEnabled {
-		purchase, err := plus.ValidatePurchaseConfig(cfg.purchaseConfig)
-		if err != nil {
-			return appConfig{}, fmt.Errorf("validate account purchase config: %w", err)
-		}
-		cfg.purchaseConfig = purchase
 	}
 	return cfg, nil
 }
