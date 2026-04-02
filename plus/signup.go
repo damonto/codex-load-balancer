@@ -169,7 +169,7 @@ func (r *registrationFlow) createAccount(ctx context.Context) (ChatGPTSession, e
 	return session, nil
 }
 
-func (r *registrationFlow) waitOTP(ctx context.Context, previousEmail string) (string, error) {
+func (r *registrationFlow) waitOTP(ctx context.Context, previousEmail emailCursor) (string, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, r.cfg.OTPWait)
 	defer cancel()
 
@@ -177,10 +177,10 @@ func (r *registrationFlow) waitOTP(ctx context.Context, previousEmail string) (s
 	defer ticker.Stop()
 
 	var lastErr error
-	slog.Info("waiting for otp", "email", r.email, "timeout", r.cfg.OTPWait.String(), "poll", r.cfg.OTPPoll.String(), "has_previous_email", previousEmail != "")
+	slog.Info("waiting for otp", "email", r.email, "timeout", r.cfg.OTPWait.String(), "poll", r.cfg.OTPPoll.String(), "has_previous_email", previousEmail.EmailID != 0 || previousEmail.HasCreatedAt)
 
 	for {
-		content, found, err := latestChangedWithContext(waitCtx, r.email, previousEmail)
+		content, found, err := latestAfterWithContext(waitCtx, r.email, previousEmail)
 		if err != nil {
 			slog.Warn("otp poll failed", "email", r.email, "err", err)
 			lastErr = err

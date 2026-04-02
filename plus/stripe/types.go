@@ -18,7 +18,7 @@ const (
 	paymentMethodAllowRedisplay     = "unspecified"
 	paymentMethodMerchantVersion    = "2021"
 	confirmMerchantVersion          = "custom"
-	pollAttempts                    = 6
+	pollAttempts                    = 3
 	timeOnPageMinMillis             = 25_000
 	timeOnPageMaxMillis             = 55_000
 	elementsSessionPrefix           = "elements_session_"
@@ -100,10 +100,11 @@ type Card struct {
 }
 
 type Processor struct {
-	client    HTTPClient
-	checkout  Checkout
-	currency  string
-	userAgent string
+	client      HTTPClient
+	checkout    Checkout
+	accessToken string
+	currency    string
+	userAgent   string
 }
 
 type screenProfile struct {

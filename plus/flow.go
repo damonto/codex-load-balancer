@@ -76,7 +76,7 @@ func (r *registrationFlow) completeRegistrationFlow(ctx context.Context) (ChatGP
 	}
 	slog.Info("signup password submitted", "email", r.email)
 
-	previousOTPEmail, err := latestEmailFingerprintWithContext(ctx, r.email)
+	previousOTPEmail, err := latestEmailCursorWithContext(ctx, r.email)
 	if err != nil {
 		return ChatGPTSession{}, fmt.Errorf("load latest registration email: %w", err)
 	}
@@ -122,7 +122,7 @@ func (r *registrationFlow) completeCodexLoginFlow(ctx context.Context) (AuthToke
 	}
 	slog.Info("codex oauth authorize page opened", "email", r.email, "landing_url", landingURL)
 
-	previousOTPEmail, err := latestEmailFingerprintWithContext(ctx, r.email)
+	previousOTPEmail, err := latestEmailCursorWithContext(ctx, r.email)
 	if err != nil {
 		return AuthTokens{}, "", fmt.Errorf("load latest codex login email: %w", err)
 	}

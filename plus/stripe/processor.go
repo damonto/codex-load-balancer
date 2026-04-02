@@ -7,12 +7,13 @@ import (
 	"strings"
 )
 
-func NewProcessor(client HTTPClient, checkout Checkout, currency, userAgent string) *Processor {
+func NewProcessor(client HTTPClient, checkout Checkout, accessToken, currency, userAgent string) *Processor {
 	return &Processor{
-		client:    client,
-		checkout:  checkout,
-		currency:  strings.TrimSpace(currency),
-		userAgent: strings.TrimSpace(userAgent),
+		client:      client,
+		checkout:    checkout,
+		accessToken: accessToken,
+		currency:    strings.TrimSpace(currency),
+		userAgent:   strings.TrimSpace(userAgent),
 	}
 }
 
@@ -71,6 +72,17 @@ func (p *Processor) Pay(ctx context.Context, billing Billing, card Card) error {
 	if paymentSucceeded(result) {
 		slog.Info("stripe payment completed", "checkout_session", shortLogID(p.checkout.SessionID), "mode", "confirm")
 		return nil
+	}
+
+	if result.Status == "open" {
+		slog.Info("stripe payment pending approving", "checkout_session", shortLogID((p.checkout.SessionID)))
+		if err := p.approvePayment(ctx); err != nil {
+			slog.Warn(
+				"stripe payment approval failed",
+				"checkout_session", shortLogID(p.checkout.SessionID),
+			)
+			return fmt.Errorf("approve payment: %w", err)
+		}
 	}
 
 	slog.Info("stripe payment polling started", "checkout_session", shortLogID(p.checkout.SessionID))

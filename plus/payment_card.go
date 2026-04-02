@@ -42,7 +42,7 @@ func randomCard(cfg PaymentCardConfig) (PaymentCard, error) {
 		Number:   number,
 		CVC:      fmt.Sprintf("%03d", randv2.N(1000)),
 		ExpMonth: fmt.Sprintf("%02d", 1+randv2.N(12)),
-		ExpYear:  fmt.Sprintf("%02d", 26+randv2.N(5)),
+		ExpYear:  fmt.Sprintf("%02d", 27+randv2.N(5)),
 	}, nil
 }
 

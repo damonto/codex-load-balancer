@@ -2,6 +2,7 @@ package stripe
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -27,11 +28,6 @@ func (p *Processor) preparePaymentPage(ctx context.Context, billing Billing, che
 		return fmt.Errorf("lookup consumer session: %w", err)
 	}
 	slog.Info("stripe consumer session lookup completed", "checkout_session", shortLogID(p.checkout.SessionID))
-	slog.Info("stripe payment page address update started", "checkout_session", shortLogID(p.checkout.SessionID))
-	if err := p.updatePaymentPageAddress(ctx, billing, checkoutCtx); err != nil {
-		return fmt.Errorf("update payment page address: %w", err)
-	}
-	slog.Info("stripe payment page address update completed", "checkout_session", shortLogID(p.checkout.SessionID))
 	return nil
 }
 
@@ -169,52 +165,6 @@ func (p *Processor) lookupConsumerSession(ctx context.Context, email string, che
 		}
 		var payload struct{}
 		if err := p.client.PostForm(ctx, "https://api.stripe.com/v1/consumers/sessions/lookup", headers(), form, &payload); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (p *Processor) updatePaymentPageAddress(ctx context.Context, billing Billing, checkoutCtx *checkoutContext) error {
-	form := url.Values{
-		"elements_session_client[elements_init_source]":                            {elementsInitSource},
-		"elements_session_client[referrer_host]":                                   {checkoutReferrerHost},
-		"elements_session_client[session_id]":                                      {checkoutCtx.ElementsSessionID},
-		"elements_session_client[stripe_js_id]":                                    {checkoutCtx.StripeJSID},
-		"elements_session_client[locale]":                                          {browserLocale},
-		"elements_session_client[is_aggregation_expected]":                         {"false"},
-		"client_attribution_metadata[merchant_integration_additional_elements][0]": {"payment"},
-		"client_attribution_metadata[merchant_integration_additional_elements][1]": {"address"},
-		"key":             {p.checkout.PublishableKey},
-		"_stripe_version": {checkoutCtx.StripeVersion},
-	}
-	if checkoutCtx.StripeVersion == versionFull {
-		setIndexedValues(form, "elements_session_client[client_betas]", "custom_checkout_server_updates_1", "custom_checkout_manual_approval_1")
-	}
-
-	steps := []struct {
-		Key   string
-		Value string
-	}{
-		{Key: "tax_region[country]", Value: billing.Country},
-		{},
-		{Key: "tax_region[line1]", Value: billing.AddressLine1},
-		{Key: "tax_region[city]", Value: billing.AddressCity},
-		{Key: "tax_region[state]", Value: billing.AddressState},
-		{Key: "tax_region[postal_code]", Value: billing.PostalCode},
-	}
-
-	for _, step := range steps {
-		if step.Key != "" {
-			form.Set(step.Key, step.Value)
-		}
-		var payload struct{}
-		slog.Info(
-			"stripe payment page address step",
-			"checkout_session", shortLogID(p.checkout.SessionID),
-			"field", step.Key,
-		)
-		if err := p.client.PostForm(ctx, "https://api.stripe.com/v1/payment_pages/"+p.checkout.SessionID, headers(), form, &payload); err != nil {
 			return err
 		}
 	}
@@ -368,6 +318,7 @@ func (p *Processor) pollPaymentResult(ctx context.Context, checkoutCtx *checkout
 			)
 			return payload, nil
 		}
+
 		lastErr = fmt.Errorf("payment poll still pending: state=%q payment_status=%q", payload.State, payload.PaymentObjectStatus)
 		slog.Info(
 			"stripe payment poll pending",
@@ -375,12 +326,37 @@ func (p *Processor) pollPaymentResult(ctx context.Context, checkoutCtx *checkout
 			"attempt", attempt+1,
 			"state", payload.State,
 			"payment_status", payload.PaymentObjectStatus,
+			"payload", payload,
 		)
 	}
 	if lastErr != nil {
 		return paymentPagePollResponse{}, lastErr
 	}
 	return paymentPagePollResponse{}, errors.New("payment result poll timed out")
+}
+
+func (p *Processor) approvePayment(ctx context.Context) error {
+	body, err := json.Marshal(map[string]string{
+		"checkout_session_id": p.checkout.SessionID,
+		"processor_entity":    "openai_llc",
+	})
+	if err != nil {
+		return fmt.Errorf("encode payment approval payload: %w", err)
+	}
+	var result struct {
+		Result string `json:"result"`
+	}
+
+	if err := p.client.PostRawJSON(ctx, "https://chatgpt.com/backend-api/payments/checkout/approve", map[string]string{
+		"Authorization": "Bearer " + p.accessToken,
+		"User-Agent":    p.userAgent,
+		"Origin":        "https://chatgpt.com",
+		"Referer":       "https://chatgpt.com",
+	}, string(body), "application/json", &result); err != nil {
+		return fmt.Errorf("send payment approval request: %w", err)
+	}
+	slog.Info("stripe payment approved", "checkout_session", shortLogID(p.checkout.SessionID), "result", result.Result)
+	return nil
 }
 
 func headers() map[string]string {

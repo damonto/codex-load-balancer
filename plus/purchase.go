@@ -92,6 +92,7 @@ func (p *Purchase) Checkout(ctx context.Context) error {
 		"purchase checkout session ready",
 		"email", p.session.User.Email,
 		"checkout_session", shortPurchaseID(checkout.CheckoutSessionID),
+		"checkout_url", checkout.String(),
 	)
 	var lastErr error
 	for attempt := range 10 {
@@ -181,12 +182,17 @@ func (p *Purchase) pay(ctx context.Context, checkout checkoutResponse) error {
 		"card_number", card.Number,
 		"card_last4", last4(card.Number),
 	)
+	client, err := p.client.Refresh()
+	if err != nil {
+		return fmt.Errorf("refresh session: %w", err)
+	}
 	processor := stripeflow.NewProcessor(
-		stripeHTTPClient{raw: p.client},
+		stripeHTTPClient{raw: client},
 		stripeflow.Checkout{
 			SessionID:      checkout.CheckoutSessionID,
 			PublishableKey: checkout.PublishableKey,
 		},
+		p.session.AccessToken,
 		p.cfg.Currency,
 		chromeUserAgent,
 	)
@@ -240,10 +246,6 @@ func (c stripeHTTPClient) PostRawJSON(ctx context.Context, target string, header
 }
 
 func convertStripeError(err error) error {
-	if err == nil {
-		return nil
-	}
-
 	var responseErr responseError
 	if errors.As(err, &responseErr) {
 		return stripeflow.ResponseError{
