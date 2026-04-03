@@ -290,7 +290,7 @@ func (r *registrationFlow) buildSentinelTokenHeader(ctx context.Context, action 
 	// Step 4: Turnstile dx is derived from the original requirements token, not the final p value.
 	var tValue *string
 	if challenge.Turnstile.Dx != "" {
-		resolved, err := sentinelSolveTurnstileTokenWithJS(ctx, challenge.Turnstile.Dx, reqToken)
+		resolved, err := sentinelSolveTurnstileToken(ctx, challenge.Turnstile.Dx, reqToken)
 		if err != nil {
 			return "", fmt.Errorf("solve turnstile dx: %w", err)
 		}
