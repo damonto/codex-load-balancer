@@ -3,19 +3,11 @@ package plus
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"strings"
 )
 
 func sentinelSolveTurnstileToken(ctx context.Context, dx, proof string) (string, error) {
-	if dx == "" {
-		return "", errors.New("turnstile dx is empty")
-	}
-	if proof == "" {
-		return "", errors.New("turnstile proof is empty")
-	}
-
 	solver, err := newTurnstileSolver(ctx, dx, proof)
 	if err != nil {
 		return "", fmt.Errorf("build turnstile solver: %w", err)
