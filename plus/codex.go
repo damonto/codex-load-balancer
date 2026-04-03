@@ -1,7 +1,6 @@
 package plus
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -147,7 +146,7 @@ func (r *registrationFlow) submitEmailForCodexOnce(ctx context.Context) (authPag
 		"Accept":                "application/json",
 		"Origin":                authOriginURL,
 		"Referer":               authOriginURL + "/log-in",
-		"openai-sentinel-token": sentinelToken,
+		"Openai-Sentinel-Token": sentinelToken,
 	}
 	var parsed authPageResponse
 	err = r.client.PostJSON(ctx, authOriginURL+"/api/accounts/authorize/continue", headers, body, &parsed)
@@ -189,7 +188,7 @@ func (r *registrationFlow) verifyPasswordForCodex(ctx context.Context) (authPage
 		"Accept":                "application/json",
 		"Origin":                authOriginURL,
 		"Referer":               authOriginURL + "/log-in/password",
-		"openai-sentinel-token": sentinelToken,
+		"Openai-Sentinel-Token": sentinelToken,
 	}
 	var parsed authPageResponse
 	err = r.client.PostJSON(ctx, authOriginURL+"/api/accounts/password/verify", headers, body, &parsed)
@@ -220,61 +219,6 @@ func (r *registrationFlow) primeLoginStep(ctx context.Context) error {
 		return errors.New("oai-did cookie missing after log-in page")
 	}
 	return nil
-}
-
-func (r *registrationFlow) buildSentinelTokenHeader(ctx context.Context, action string) (string, error) {
-	if action == "" {
-		return "", errors.New("sentinel action is empty")
-	}
-	if r.oaiDID == "" {
-		return "", errors.New("oai-did is empty")
-	}
-
-	reqPayload := map[string]string{
-		"p":    "",
-		"id":   r.oaiDID,
-		"flow": action,
-	}
-	reqBody, err := json.Marshal(reqPayload)
-	if err != nil {
-		return "", fmt.Errorf("encode sentinel request body: %w", err)
-	}
-
-	headers := map[string]string{
-		"origin":  "https://sentinel.openai.com",
-		"referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
-	}
-	resp, err := r.client.Post(ctx, "https://sentinel.openai.com/backend-api/sentinel/req", headers, bytes.NewReader(reqBody), "text/plain;charset=UTF-8")
-	if err != nil {
-		return "", fmt.Errorf("request sentinel token: %w", err)
-	}
-	defer resp.Body.Close()
-	if err := expectStatus(resp, http.StatusOK); err != nil {
-		return "", fmt.Errorf("request sentinel token: %w", err)
-	}
-
-	var payload struct {
-		Token string `json:"token"`
-	}
-	if err := decodeJSON(resp.Body, &payload); err != nil {
-		return "", fmt.Errorf("decode sentinel response: %w", err)
-	}
-	if payload.Token == "" {
-		return "", errors.New("sentinel response token is empty")
-	}
-
-	tokenPayload := map[string]string{
-		"p":    "",
-		"t":    "",
-		"c":    payload.Token,
-		"id":   r.oaiDID,
-		"flow": action,
-	}
-	tokenBody, err := json.Marshal(tokenPayload)
-	if err != nil {
-		return "", fmt.Errorf("encode sentinel token header: %w", err)
-	}
-	return string(tokenBody), nil
 }
 
 func (r *registrationFlow) loadWorkspaces() ([]workspace, error) {

@@ -37,3 +37,9 @@ refs/
 
 # Frontend
 node_modules/
+
+# AI
+.codex
+
+# refs
+plus/turnstile-reversed

@@ -1,7 +1,6 @@
 package plus
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,14 +8,15 @@ import (
 	"io"
 	randv2 "math/rand/v2"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
 const (
-	defaultEmailAPIURL       = "https://mail.wxjerry.top"
-	emailAuthToken           = ""
-	defaultEmailLocalPartLen = 12
+	defaultEmailAPIURL           = "https://mailbox.sox.pm"
+	defaultEmailLocalPartLen     = 12
+	defaultEmailSubdomainRandLen = 3
 )
 
 var (
@@ -26,24 +26,15 @@ var (
 	emailDomains     = [...]string{}
 )
 
-type emailListResponse struct {
-	Code    int               `json:"code"`
-	Message string            `json:"message"`
-	Data    []emailListRecord `json:"data"`
-}
-
 type emailListRecord struct {
-	EmailID    int    `json:"emailId"`
-	SendEmail  string `json:"sendEmail"`
+	EmailID    int    `json:"id,string"`
+	SendEmail  string `json:"sender"`
 	SendName   string `json:"sendName"`
 	Subject    string `json:"subject"`
-	ToEmail    string `json:"toEmail"`
-	ToName     string `json:"toName"`
-	CreateTime string `json:"createTime"`
-	Type       int    `json:"type"`
+	ToEmail    string `json:"recipient"`
+	CreateTime string `json:"received_at"`
 	Content    string `json:"content"`
-	Text       string `json:"text"`
-	IsDel      int    `json:"isDel"`
+	Text       string `json:"plaintext"`
 }
 
 type emailCursor struct {
@@ -67,8 +58,12 @@ func GenerateWithContext(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("generate local part: %w", err)
 	}
-	domain := emailDomains[randv2.N(len(emailDomains))]
-	return localPart + "@" + domain, nil
+	baseDomain := emailDomains[randv2.N(len(emailDomains))]
+	mailboxDomain, err := randomMailboxDomain(baseDomain)
+	if err != nil {
+		return "", fmt.Errorf("generate mailbox domain: %w", err)
+	}
+	return localPart + "@" + mailboxDomain, nil
 }
 
 // Latest returns the content of the newest received email for the given address.
@@ -130,20 +125,12 @@ func latestInboxRecordWithContext(ctx context.Context, address string) (emailLis
 		return emailListRecord{}, errors.New("address is empty")
 	}
 
-	resp, err := fetchEmailList(ctx, address)
+	records, err := fetchEmailList(ctx, address)
 	if err != nil {
 		return emailListRecord{}, fmt.Errorf("fetching emails: %w", err)
 	}
 
-	if resp.Code != http.StatusOK {
-		msg := strings.TrimSpace(resp.Message)
-		if msg == "" {
-			return emailListRecord{}, fmt.Errorf("fetching emails: code %d", resp.Code)
-		}
-		return emailListRecord{}, fmt.Errorf("fetching emails: code %d: %s", resp.Code, msg)
-	}
-
-	records := filterInboxRecords(resp.Data, address)
+	records = filterInboxRecords(records, address)
 	if len(records) == 0 {
 		return emailListRecord{}, errEmailNotFound
 	}
@@ -154,10 +141,10 @@ func latestInboxRecordWithContext(ctx context.Context, address string) (emailLis
 func emailContent(record emailListRecord) (string, error) {
 	content := strings.TrimSpace(record.Text)
 	if content == "" {
-		content = strings.TrimSpace(record.Content)
+		content = strings.TrimSpace(record.Subject)
 	}
 	if content == "" {
-		content = strings.TrimSpace(record.Subject)
+		content = strings.TrimSpace(record.Content)
 	}
 	if content == "" {
 		return "", errors.New("latest email content is empty")
@@ -192,41 +179,38 @@ func isRecordAfterCursor(record emailListRecord, cursor emailCursor) bool {
 	return false
 }
 
-func fetchEmailList(ctx context.Context, address string) (emailListResponse, error) {
-	body, err := json.Marshal(map[string]string{"toEmail": address})
+func fetchEmailList(ctx context.Context, address string) ([]emailListRecord, error) {
+	reqURL, err := url.Parse(emailAPIURL)
 	if err != nil {
-		return emailListResponse{}, fmt.Errorf("encode request body: %w", err)
+		return nil, fmt.Errorf("parse api url: %w", err)
 	}
+	reqURL = reqURL.JoinPath("api.php")
+	query := reqURL.Query()
+	query.Set("to", address)
+	reqURL.RawQuery = query.Encode()
 
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		emailAPIURL+"/api/public/emailList",
-		bytes.NewReader(body),
-	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL.String(), nil)
 	if err != nil {
-		return emailListResponse{}, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("Authorization", emailAuthToken)
-	req.Header.Set("Content-Type", "application/json")
 
 	res, err := emailHTTPClient.Do(req)
 	if err != nil {
-		return emailListResponse{}, fmt.Errorf("send request: %w", err)
+		return nil, fmt.Errorf("send request: %w", err)
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		body, err := io.ReadAll(res.Body)
 		if err != nil {
-			return emailListResponse{}, fmt.Errorf("read response body: %w", err)
+			return nil, fmt.Errorf("read response body: %w", err)
 		}
-		return emailListResponse{}, fmt.Errorf("email list status %d: %s", res.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("email list status %d: %s", res.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	var payload emailListResponse
+	var payload []emailListRecord
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
-		return emailListResponse{}, fmt.Errorf("decode response JSON: %w", err)
+		return nil, fmt.Errorf("decode response JSON: %w", err)
 	}
 	return payload, nil
 }
@@ -238,16 +222,23 @@ func randomLocalPart(length int) (string, error) {
 	return randomString(length, "abcdefghijklmnopqrstuvwxyz0123456789")
 }
 
+func randomMailboxDomain(baseDomain string) (string, error) {
+	baseDomain = strings.TrimSpace(baseDomain)
+	if baseDomain == "" {
+		return "", errors.New("base domain is empty")
+	}
+
+	prefix, err := randomString(defaultEmailSubdomainRandLen, "abcdefghijklmnopqrstuvwxyz0123456789")
+	if err != nil {
+		return "", fmt.Errorf("generate mailbox subdomain prefix: %w", err)
+	}
+	return prefix + "mail." + baseDomain, nil
+}
+
 func filterInboxRecords(records []emailListRecord, toEmail string) []emailListRecord {
 	toEmail = strings.TrimSpace(toEmail)
 	filtered := make([]emailListRecord, 0, len(records))
 	for _, rec := range records {
-		if rec.IsDel != 0 {
-			continue
-		}
-		if rec.Type != 0 {
-			continue
-		}
 		if toEmail != "" && !strings.EqualFold(strings.TrimSpace(rec.ToEmail), toEmail) {
 			continue
 		}
@@ -257,13 +248,7 @@ func filterInboxRecords(records []emailListRecord, toEmail string) []emailListRe
 	if len(filtered) > 0 {
 		return filtered
 	}
-
-	for _, rec := range records {
-		if rec.IsDel == 0 {
-			filtered = append(filtered, rec)
-		}
-	}
-	return filtered
+	return records
 }
 
 func preferOpenAIRecords(records []emailListRecord) []emailListRecord {

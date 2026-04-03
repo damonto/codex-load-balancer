@@ -93,14 +93,19 @@ func extractCSRFToken(raw string) string {
 }
 
 func (r *registrationFlow) registerPassword(ctx context.Context) error {
+	sentinelToken, err := r.buildSentinelTokenHeader(ctx, sentinelActionUsernamePasswordCreate)
+	if err != nil {
+		return fmt.Errorf("build sentinel token: %w", err)
+	}
 	body := map[string]string{
 		"username": r.email,
 		"password": r.password,
 	}
 	headers := map[string]string{
-		"Accept":  "application/json",
-		"Origin":  authOriginURL,
-		"Referer": authOriginURL + "/create-account/password",
+		"Accept":                "application/json",
+		"Origin":                authOriginURL,
+		"Referer":               authOriginURL + "/create-account/password",
+		"Openai-Sentinel-Token": sentinelToken,
 	}
 	if err := r.client.PostJSONOK(ctx, authOriginURL+"/api/accounts/user/register", headers, body); err != nil {
 		return fmt.Errorf("post password register: %w", err)
