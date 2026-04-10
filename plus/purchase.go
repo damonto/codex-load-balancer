@@ -1,73 +1,63 @@
 package plus
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
-	"net/url"
 	"strings"
 
-	stripeflow "github.com/damonto/codex-load-balancer/plus/stripe"
+	http "github.com/bogdanfinn/fhttp"
 )
 
+const (
+	revenueCatReceiptsURL = "https://api.revenuecat.com/v1/receipts"
+	revenueCatUserAgent   = "Dalvik/2.1.0 (Linux; U; Android 16; 2211133C Build/BP2A.250605.031.A3)"
+
+	revenueCatPlusProductID  = "oai.chatgpt.plus"
+	revenueCatPlusBasePlanID = "oai-chatgpt-plus-1m-1999"
+	revenueCatPlusOfferID    = "plus-1-month-free-trial"
+)
+
+type purchaseHTTPClient interface {
+	Post(ctx context.Context, target string, headers map[string]string, body io.Reader, contentType string) (*http.Response, error)
+}
+
 type Purchase struct {
-	client  *client
+	client  purchaseHTTPClient
 	session ChatGPTSession
 	cfg     PurchaseConfig
+	lease   *PurchaseTokenLease
 }
 
 type PurchaseConfig struct {
-	Enabled         bool
-	PlanName        string
-	Currency        string
-	PromoCampaignID string
-	CheckoutUIMode  string
-	Billing         PurchaseBillingConfig
-	PaymentCard     PaymentCardConfig
+	Enabled             bool
+	RevenueCatBearerKey string
+	Store               *PurchaseTokenStore
 }
 
-type PurchaseBillingConfig struct {
-	Name         string
-	Country      string
-	AddressLine1 string
-	AddressCity  string
-	AddressState string
-	PostalCode   string
+type revenueCatReceiptRequest struct {
+	FetchToken         string                        `json:"fetch_token"`
+	ProductIDs         []string                      `json:"product_ids"`
+	PlatformProductIDs []revenueCatPlatformProductID `json:"platform_product_ids"`
+	AppUserID          string                        `json:"app_user_id"`
 }
 
-type checkoutRequest struct {
-	PlanName       string                 `json:"plan_name"`
-	BillingDetails checkoutBillingDetails `json:"billing_details"`
-	PromoCampaign  checkoutPromoCampaign  `json:"promo_campaign"`
-	CheckoutUIMode string                 `json:"checkout_ui_mode"`
+type revenueCatPlatformProductID struct {
+	ProductID  string `json:"product_id"`
+	BasePlanID string `json:"base_plan_id"`
+	OfferID    string `json:"offer_id"`
 }
 
-type checkoutBillingDetails struct {
-	Country  string `json:"country"`
-	Currency string `json:"currency"`
-}
-
-type checkoutPromoCampaign struct {
-	PromoCampaignID        string `json:"promo_campaign_id"`
-	IsCouponFromQueryParam bool   `json:"is_coupon_from_query_param"`
-}
-
-type checkoutResponse struct {
-	CheckoutSessionID string `json:"checkout_session_id"`
-	PublishableKey    string `json:"publishable_key"`
-	ClientSecret      string `json:"client_secret"`
-}
-
-func (c checkoutResponse) String() string {
-	return stripeflow.Checkout{SessionID: c.CheckoutSessionID}.URL()
-}
-
-func NewPurchase(client *client, session ChatGPTSession, cfg PurchaseConfig) *Purchase {
+func NewPurchase(client purchaseHTTPClient, session ChatGPTSession, cfg PurchaseConfig, lease *PurchaseTokenLease) *Purchase {
 	return &Purchase{
 		client:  client,
 		session: session,
 		cfg:     cfg,
+		lease:   lease,
 	}
 }
 
@@ -75,202 +65,114 @@ func (p *Purchase) Checkout(ctx context.Context) error {
 	if !p.cfg.Enabled {
 		return nil
 	}
-
-	slog.Info(
-		"purchase checkout started",
-		"email", p.session.User.Email,
-		"plan", p.cfg.PlanName,
-		"currency", p.cfg.Currency,
-		"checkout_ui_mode", p.cfg.CheckoutUIMode,
-	)
-	checkout, err := p.requestCheckoutURL(ctx)
-	if err != nil {
-		slog.Warn("purchase checkout request failed", "email", p.session.User.Email, "err", err)
-		return fmt.Errorf("request plus checkout: %w", err)
+	if strings.TrimSpace(p.cfg.RevenueCatBearerKey) == "" {
+		return errors.New("purchase revenuecat bearer key is empty")
 	}
-	slog.Info(
-		"purchase checkout session ready",
-		"email", p.session.User.Email,
-		"checkout_session", shortPurchaseID(checkout.CheckoutSessionID),
-		"checkout_url", checkout.String(),
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	body, err := json.Marshal(revenueCatReceiptRequest{
+		FetchToken: p.lease.FetchToken(),
+		ProductIDs: []string{revenueCatPlusProductID},
+		PlatformProductIDs: []revenueCatPlatformProductID{
+			{
+				ProductID:  revenueCatPlusProductID,
+				BasePlanID: revenueCatPlusBasePlanID,
+				OfferID:    revenueCatPlusOfferID,
+			},
+		},
+		AppUserID: p.session.Account.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("encode revenuecat purchase request: %w", err)
+	}
+
+	slog.InfoContext(
+		ctx,
+		"purchase request started",
+		"account_id", p.session.Account.ID,
+		"purchase_token_id", p.lease.ID(),
 	)
-	var lastErr error
-	for attempt := range 10 {
-		slog.Info(
-			"purchase payment attempt started",
-			"email", p.session.User.Email,
-			"attempt", attempt+1,
-			"max_attempts", 10,
-		)
-		if err := p.pay(ctx, checkout); err != nil {
-			lastErr = err
-			slog.Warn(
-				"purchase payment attempt failed",
-				"email", p.session.User.Email,
-				"attempt", attempt+1,
-				"err", err,
+
+	resp, err := p.client.Post(ctx, revenueCatReceiptsURL, map[string]string{
+		"Authorization": fmt.Sprintf("Bearer %s", p.cfg.RevenueCatBearerKey),
+		"User-Agent":    revenueCatUserAgent,
+		"X-Platform":    "android",
+	}, bytes.NewReader(body), "application/json")
+	if err != nil {
+		markErr := p.markLeaseDead(ctx, nil, err.Error())
+		if markErr != nil {
+			return errors.Join(
+				fmt.Errorf("post revenuecat receipt: %w", err),
+				fmt.Errorf("mark purchase token dead: %w", markErr),
 			)
-			continue
 		}
-		slog.Info(
-			"purchase completed",
-			"email", p.session.User.Email,
-			"attempt", attempt+1,
-		)
-		return nil
-	}
-	slog.Error("purchase failed after retries", "email", p.session.User.Email, "attempts", 10, "err", lastErr)
-	return lastErr
-}
-
-func (p *Purchase) requestCheckoutURL(ctx context.Context) (checkoutResponse, error) {
-	slog.Info(
-		"requesting plus checkout url",
-		"email", p.session.User.Email,
-		"plan", p.cfg.PlanName,
-		"currency", p.cfg.Currency,
-	)
-	request := checkoutRequest{
-		PlanName: p.cfg.PlanName,
-		BillingDetails: checkoutBillingDetails{
-			Country:  p.cfg.Billing.Country,
-			Currency: p.cfg.Currency,
-		},
-		PromoCampaign: checkoutPromoCampaign{
-			PromoCampaignID:        p.cfg.PromoCampaignID,
-			IsCouponFromQueryParam: false,
-		},
-		CheckoutUIMode: p.cfg.CheckoutUIMode,
-	}
-	var response checkoutResponse
-	err := p.client.PostJSON(ctx, chatgptURL+"/backend-api/payments/checkout", map[string]string{
-		"Authorization": fmt.Sprintf("Bearer %s", p.session.AccessToken),
-		"User-Agent":    chromeUserAgent,
-	}, request, &response)
-	if err != nil {
-		return checkoutResponse{}, fmt.Errorf("post checkout request: %w", err)
-	}
-	slog.Info(
-		"plus checkout url received",
-		"email", p.session.User.Email,
-		"checkout_session", shortPurchaseID(response.CheckoutSessionID),
-		"has_publishable_key", strings.TrimSpace(response.PublishableKey) != "",
-	)
-	return response, nil
-}
-
-func (p *Purchase) pay(ctx context.Context, checkout checkoutResponse) error {
-	billing := stripeflow.Billing{
-		Name:         p.cfg.Billing.Name,
-		Email:        strings.TrimSpace(p.session.User.Email),
-		Country:      p.cfg.Billing.Country,
-		AddressLine1: p.cfg.Billing.AddressLine1,
-		AddressCity:  p.cfg.Billing.AddressCity,
-		AddressState: p.cfg.Billing.AddressState,
-		PostalCode:   p.cfg.Billing.PostalCode,
-	}
-
-	card, err := randomCard(p.cfg.PaymentCard)
-	if err != nil {
-		return fmt.Errorf("pick payment card: %w", err)
-	}
-	slog.Info(
-		"purchase card selected",
-		"email", p.session.User.Email,
-		"checkout_session", shortPurchaseID(checkout.CheckoutSessionID),
-		"billing_country", billing.Country,
-		"card_number", card.Number,
-		"card_last4", last4(card.Number),
-	)
-	client, err := p.client.Refresh()
-	if err != nil {
-		return fmt.Errorf("refresh session: %w", err)
-	}
-	processor := stripeflow.NewProcessor(
-		stripeHTTPClient{raw: client},
-		stripeflow.Checkout{
-			SessionID:      checkout.CheckoutSessionID,
-			PublishableKey: checkout.PublishableKey,
-		},
-		p.session.AccessToken,
-		p.cfg.Currency,
-		chromeUserAgent,
-	)
-	slog.Info(
-		"stripe processor started",
-		"email", p.session.User.Email,
-		"checkout_session", shortPurchaseID(checkout.CheckoutSessionID),
-	)
-	if err := processor.Pay(ctx, billing, stripeflow.Card{
-		Number:   card.Number,
-		CVC:      card.CVC,
-		ExpMonth: card.ExpMonth,
-		ExpYear:  card.ExpYear,
-	}); err != nil {
-		return fmt.Errorf("stripe checkout flow: %w", err)
-	}
-	slog.Info(
-		"stripe processor completed",
-		"email", p.session.User.Email,
-		"checkout_session", shortPurchaseID(checkout.CheckoutSessionID),
-	)
-	return nil
-}
-
-type stripeHTTPClient struct {
-	raw *client
-}
-
-func (c stripeHTTPClient) GetJSON(ctx context.Context, target string, headers map[string]string, out any) error {
-	return convertStripeError(c.raw.GetJSON(ctx, target, headers, out))
-}
-
-func (c stripeHTTPClient) PostForm(ctx context.Context, target string, headers map[string]string, values url.Values, out any) error {
-	return convertStripeError(c.raw.PostForm(ctx, target, headers, values, out))
-}
-
-func (c stripeHTTPClient) PostRawJSON(ctx context.Context, target string, headers map[string]string, body string, contentType string, out any) error {
-	resp, err := c.raw.Post(ctx, target, headers, strings.NewReader(body), contentType)
-	if err != nil {
-		return convertStripeError(err)
+		return fmt.Errorf("post revenuecat receipt: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if err := expectStatus(resp, 200); err != nil {
-		return convertStripeError(err)
-	}
-	if err := decodeJSON(resp.Body, out); err != nil {
-		return err
-	}
-	return nil
-}
-
-func convertStripeError(err error) error {
-	var responseErr responseError
-	if errors.As(err, &responseErr) {
-		return stripeflow.ResponseError{
-			StatusCode: responseErr.StatusCode,
-			Body:       responseErr.Body,
+	responseBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		markErr := p.markLeaseDead(ctx, &resp.StatusCode, readErr.Error())
+		if markErr != nil {
+			return errors.Join(
+				fmt.Errorf("read revenuecat response body: %w", readErr),
+				fmt.Errorf("mark purchase token dead: %w", markErr),
+			)
 		}
+		return fmt.Errorf("read revenuecat response body: %w", readErr)
 	}
-	return err
+	responseText := strings.TrimSpace(string(responseBody))
+
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		if err := p.markLeaseConsumed(ctx, resp.StatusCode); err != nil {
+			return fmt.Errorf("mark purchase token consumed: %w", err)
+		}
+		slog.InfoContext(
+			ctx,
+			"purchase request completed",
+			"account_id", p.session.Account.ID,
+			"purchase_token_id", p.lease.ID(),
+			"status_code", resp.StatusCode,
+		)
+		return nil
+	case resp.StatusCode >= http.StatusInternalServerError:
+		markErr := p.markLeaseRetryable(ctx, resp.StatusCode, responseText)
+		if markErr != nil {
+			return errors.Join(
+				responseError{StatusCode: resp.StatusCode, Body: responseText},
+				fmt.Errorf("mark purchase token retryable: %w", markErr),
+			)
+		}
+		return responseError{StatusCode: resp.StatusCode, Body: responseText}
+	default:
+		markErr := p.markLeaseDead(ctx, &resp.StatusCode, responseText)
+		if markErr != nil {
+			return errors.Join(
+				responseError{StatusCode: resp.StatusCode, Body: responseText},
+				fmt.Errorf("mark purchase token dead: %w", markErr),
+			)
+		}
+		return responseError{StatusCode: resp.StatusCode, Body: responseText}
+	}
 }
 
-func shortPurchaseID(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	if len(value) <= 8 {
-		return value
-	}
-	return value[:4] + "..." + value[len(value)-4:]
+func (p *Purchase) markLeaseConsumed(ctx context.Context, statusCode int) error {
+	cleanupCtx, cancel := cleanupContext(ctx)
+	defer cancel()
+	return p.lease.MarkConsumed(cleanupCtx, p.session.Account.ID, statusCode)
 }
 
-func last4(value string) string {
-	value = strings.TrimSpace(value)
-	if len(value) <= 4 {
-		return value
-	}
-	return value[len(value)-4:]
+func (p *Purchase) markLeaseRetryable(ctx context.Context, statusCode int, lastErr string) error {
+	cleanupCtx, cancel := cleanupContext(ctx)
+	defer cancel()
+	return p.lease.MarkRetryable(cleanupCtx, p.session.Account.ID, statusCode, lastErr)
+}
+
+func (p *Purchase) markLeaseDead(ctx context.Context, statusCode *int, lastErr string) error {
+	cleanupCtx, cancel := cleanupContext(ctx)
+	defer cancel()
+	return p.lease.MarkDead(cleanupCtx, p.session.Account.ID, statusCode, lastErr)
 }

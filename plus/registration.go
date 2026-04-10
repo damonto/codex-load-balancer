@@ -64,6 +64,7 @@ type RegisterResult struct {
 type registrationFlow struct {
 	cfg           RegisterOptions
 	client        *client
+	purchaseTokenLease *PurchaseTokenLease
 	oaiDID        string
 	email         string
 	password      string

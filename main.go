@@ -14,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/damonto/codex-load-balancer/plus"
 )
 
 const usageSinkBufferSize = 2048
@@ -21,9 +23,10 @@ const usageSinkBufferSize = 2048
 var BuildVersion string
 
 type appRuntime struct {
-	store     *TokenStore
-	usageDB   *UsageDB
-	usageSink *UsageSink
+	store         *TokenStore
+	usageDB       *UsageDB
+	usageSink     *UsageSink
+	purchaseStore *plus.PurchaseTokenStore
 }
 
 func main() {
@@ -57,7 +60,7 @@ func run(cfg appConfig) error {
 		return err
 	}
 
-	rt, err := bootstrapRuntime(cfg)
+	rt, err := bootstrapRuntime(&cfg)
 	if err != nil {
 		return err
 	}
@@ -98,22 +101,33 @@ func validateAppConfig(cfg appConfig) error {
 	return nil
 }
 
-func bootstrapRuntime(cfg appConfig) (*appRuntime, error) {
+func bootstrapRuntime(cfg *appConfig) (*appRuntime, error) {
 	store := NewTokenStore()
 	if err := loadTokensFromDir(store, cfg.dataDir); err != nil {
 		return nil, fmt.Errorf("initial token load: %w", err)
 	}
 
-	usageDBPath := filepath.Join(cfg.dataDir, "usage.db")
+	usageDBPath := filepath.Join(cfg.dataDir, "clb.db")
 	usageDB, err := openUsageDB(usageDBPath)
 	if err != nil {
 		return nil, fmt.Errorf("open usage db %q: %w", usageDBPath, err)
 	}
 
+	var purchaseStore *plus.PurchaseTokenStore
+	if cfg.purchaseConfig.Enabled {
+		purchaseStore, err = plus.NewPurchaseTokenStore(usageDB.db)
+		if err != nil {
+			usageDB.Close()
+			return nil, fmt.Errorf("init purchase tables in usage db %q: %w", usageDBPath, err)
+		}
+		cfg.purchaseConfig.Store = purchaseStore
+	}
+
 	return &appRuntime{
-		store:     store,
-		usageDB:   usageDB,
-		usageSink: NewUsageSink(usageDB, usageSinkBufferSize),
+		store:         store,
+		usageDB:       usageDB,
+		usageSink:     NewUsageSink(usageDB, usageSinkBufferSize),
+		purchaseStore: purchaseStore,
 	}, nil
 }
 
@@ -126,6 +140,12 @@ func closeRuntime(rt *appRuntime) {
 
 func startBackgroundWorkers(ctx context.Context, cfg appConfig, store *TokenStore) {
 	go runTokenWatcher(ctx, store, cfg.dataDir)
+	if cfg.purchaseConfig.Enabled && cfg.purchaseConfig.Store != nil {
+		if err := importPurchaseTokensFromFile(ctx, cfg.dataDir, cfg.purchaseConfig.Store); err != nil && ctx.Err() == nil {
+			slog.Warn("initial purchase token import", "err", err)
+		}
+		go runPurchaseTokenFileWatcher(ctx, cfg.dataDir, cfg.purchaseConfig.Store)
+	}
 	topUpOpts := topUpOptions{
 		Enabled:         cfg.topUpEnabled,
 		TargetCount:     cfg.minTrackedAccounts,

@@ -48,9 +48,8 @@ Startup flag:
 - `sync.usage_sync_interval_seconds` (required): Usage sync interval.
 - `sync.usage_sync_concurrency` (required): Usage sync concurrency.
 - `account.registration_proxy_pool` (required): Registration proxy pool for account top-up.
-- `account.payment_card.bins` (required when `top_up.enabled=true` and `account.purchase.enabled=true`): Card BIN prefixes or full 16-digit card numbers. Prefixes are expanded into valid card numbers automatically.
-- `account.purchase.enabled` (required): Whether account registration should run the purchase step.
-- `account.purchase.*` (required when `top_up.enabled=true` and `account.purchase.enabled=true`): Checkout and billing fields used during account purchase.
+- `account.purchase.enabled` (required): Whether account registration should run the RevenueCat purchase step.
+- `account.purchase.revenuecat_bearer_key` (required when `account.purchase.enabled = true`): Bearer key used for `POST https://api.revenuecat.com/v1/receipts`.
 
 Current example:
 
@@ -76,23 +75,9 @@ registration_proxy_pool = [
   "http://user-session-%s:pass@proxy.example.com:7777",
 ]
 
-[account.payment_card]
-bins = ["625817", "624441"]
-
 [account.purchase]
-enabled = true
-plan_name = "chatgptplusplan"
-currency = "KRW"
-promo_campaign_id = "plus-1-month-free"
-checkout_ui_mode = "custom"
-
-[account.purchase.billing]
-name = "Minjun Kim"
-country = "KR"
-address_line1 = "1 Teheran-ro, Gangnam-gu"
-address_city = "Seoul"
-address_state = "Seoul"
-postal_code = "06141"
+enabled = false
+# revenuecat_bearer_key = "goog_your_revenuecat_key"
 ```
 
 Notes:
@@ -100,11 +85,27 @@ Notes:
 - Unknown config keys cause startup failure.
 - `top_up.enabled = false` disables both startup top-up and replacement account registration after `401` / downgraded accounts are removed.
 - `account.registration_proxy_pool` must contain at least one non-empty proxy URL.
-- When `top_up.enabled = true` and `account.purchase.enabled = true`, purchase and payment card fields are passed through as configured; bad values fail during the purchase flow instead of at startup.
-- When `account.purchase.enabled = false`, registration skips the purchase step, still completes Codex OAuth, writes the Codex credential JSON, and usage sync no longer removes accounts just because `plan_type=free`.
+- `account.purchase.enabled = false` skips purchase, still completes Codex OAuth, writes the Codex credential JSON, and usage sync no longer removes accounts just because `plan_type=free`.
+- When `account.purchase.enabled = true`, the service reuses `data/clb.db`, creates the `purchase_tokens` table there, leases one queued `fetch_token` before signup, posts the RevenueCat purchase after ChatGPT account creation, and only then continues to Codex OAuth.
+- RevenueCat purchase retries only on HTTP `5xx`. HTTP `4xx`, transport errors, and timeouts mark that token as dead because one-time-use state is ambiguous after send.
+- When `data/tokens.txt` exists, the service imports it into the `purchase_tokens` table inside `data/clb.db` at startup and every 10 seconds. Use one `fetch_token` per line; blank lines and `#` comments are ignored.
 - If a proxy entry contains `%s`, each registration attempt replaces it with a fresh random `session_id`.
-- When an `account.payment_card.bins` entry is shorter than 16 digits, Codex load balancer treats it as a BIN prefix, fills the middle digits randomly, and appends the final Luhn digit automatically.
-- When an `account.payment_card.bins` entry is exactly 16 digits, Codex load balancer uses it as-is.
+
+Manual `fetch_token` queue management:
+
+```bash
+sqlite3 data/clb.db "INSERT INTO purchase_tokens (fetch_token, status) VALUES ('FETCH_TOKEN_HERE', 'available');"
+sqlite3 data/clb.db "SELECT id, status, attempt_count, account_id, response_status_code, last_error, created_at_unix FROM purchase_tokens ORDER BY id;"
+```
+
+File-based `fetch_token` queue input:
+
+```bash
+cat >> data/tokens.txt <<'EOF'
+FETCH_TOKEN_1
+FETCH_TOKEN_2
+EOF
+```
 
 ## Token File Format
 
@@ -188,8 +189,8 @@ Dashboard data:
 If old `usage_events.account_key` rows were written as `user_xx`, migrate them to `account_id` with:
 
 ```bash
-./migrate_usage_account_keys.sh --db data/usage.db --data-dir data
-./migrate_usage_account_keys.sh --apply --db data/usage.db --data-dir data
+./migrate_usage_account_keys.sh --db data/clb.db --data-dir data
+./migrate_usage_account_keys.sh --apply --db data/clb.db --data-dir data
 ```
 
 The script reads only `.tokens.account_id` from credential JSON files. It does not parse JWTs.

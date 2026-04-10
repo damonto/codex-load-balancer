@@ -62,7 +62,7 @@ func TestHandleDashboardOverviewFiltersAccountsWithoutActiveTokens(t *testing.T)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			usageDB, err := openUsageDB(filepath.Join(t.TempDir(), "usage.db"))
+			usageDB, err := openUsageDB(filepath.Join(t.TempDir(), "clb.db"))
 			if err != nil {
 				t.Fatalf("openUsageDB() error = %v", err)
 			}

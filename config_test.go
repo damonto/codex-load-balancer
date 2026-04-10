@@ -83,23 +83,8 @@ usage_sync_concurrency = 4
 [account]
 registration_proxy_pool = ["http://proxy-a", "http://proxy-b"]
 
-[account.payment_card]
-bins = ["625817", "624441"]
-
 [account.purchase]
 enabled = false
-plan_name = "chatgptplusplan"
-currency = "KRW"
-promo_campaign_id = "plus-1-month-free"
-checkout_ui_mode = "custom"
-
-[account.purchase.billing]
-name = "Minjun Kim"
-country = "KR"
-address_line1 = "1 Teheran-ro, Gangnam-gu"
-address_city = "Seoul"
-address_state = "Seoul"
-postal_code = "06141"
 `,
 			want: appConfig{
 				apiKey:             "admin",
@@ -111,22 +96,7 @@ postal_code = "06141"
 				registerTimeout:    420 * time.Second,
 				proxyPool:          plus.RegistrationProxyPool{"http://proxy-a", "http://proxy-b"},
 				purchaseConfig: plus.PurchaseConfig{
-					Enabled:         false,
-					PlanName:        "chatgptplusplan",
-					Currency:        "KRW",
-					PromoCampaignID: "plus-1-month-free",
-					CheckoutUIMode:  "custom",
-						Billing: plus.PurchaseBillingConfig{
-							Name:         "Minjun Kim",
-							Country:      "KR",
-							AddressLine1: "1 Teheran-ro, Gangnam-gu",
-							AddressCity:  "Seoul",
-							AddressState: "Seoul",
-							PostalCode:   "06141",
-						},
-					PaymentCard: plus.PaymentCardConfig{
-						BINs: []string{"625817", "624441"},
-					},
+					Enabled: false,
 				},
 				syncInterval:    600 * time.Second,
 				syncConcurrency: 4,
@@ -254,7 +224,7 @@ registration_proxy_pool = ["http://proxy-default"]
 			wantErr: "account.purchase.enabled is required",
 		},
 		{
-			name: "top up enabled allows incomplete purchase config",
+			name: "top up enabled accepts revenuecat bearer key",
 			body: `
 api_key = "k"
 data_dir = "/tmp/data"
@@ -275,11 +245,9 @@ usage_sync_concurrency = 8
 [account]
 registration_proxy_pool = ["http://proxy-default"]
 
-[account.payment_card]
-bins = ["625817", "624441"]
-
 [account.purchase]
 enabled = true
+revenuecat_bearer_key = "goog_test_key"
 `,
 			want: appConfig{
 				apiKey:             "k",
@@ -291,17 +259,15 @@ enabled = true
 				registerTimeout:    60 * time.Second,
 				proxyPool:          plus.RegistrationProxyPool{"http://proxy-default"},
 				purchaseConfig: plus.PurchaseConfig{
-					Enabled: true,
-					PaymentCard: plus.PaymentCardConfig{
-						BINs: []string{"625817", "624441"},
-					},
+					Enabled:             true,
+					RevenueCatBearerKey: "goog_test_key",
 				},
 				syncInterval:    300 * time.Second,
 				syncConcurrency: 8,
 			},
 		},
 		{
-			name: "top up enabled allows purchase city missing",
+			name: "purchase enabled requires revenuecat bearer key",
 			body: `
 api_key = "k"
 data_dir = "/tmp/data"
@@ -322,55 +288,13 @@ usage_sync_concurrency = 8
 [account]
 registration_proxy_pool = ["http://proxy-default"]
 
-[account.payment_card]
-bins = ["625817", "624441"]
-
 [account.purchase]
 enabled = true
-plan_name = "chatgptplusplan"
-currency = "KRW"
-promo_campaign_id = "plus-1-month-free"
-checkout_ui_mode = "custom"
-
-[account.purchase.billing]
-name = "Minjun Kim"
-country = "KR"
-address_line1 = "1 Teheran-ro, Gangnam-gu"
-address_state = "Seoul"
-postal_code = "06141"
 `,
-			want: appConfig{
-				apiKey:             "k",
-				dataDir:            "/tmp/data",
-				port:               8080,
-				topUpEnabled:       true,
-				minTrackedAccounts: 0,
-				registerWorkers:    1,
-				registerTimeout:    60 * time.Second,
-				proxyPool:          plus.RegistrationProxyPool{"http://proxy-default"},
-				purchaseConfig: plus.PurchaseConfig{
-					Enabled:         true,
-					PlanName:        "chatgptplusplan",
-					Currency:        "KRW",
-					PromoCampaignID: "plus-1-month-free",
-					CheckoutUIMode:  "custom",
-					Billing: plus.PurchaseBillingConfig{
-						Name:         "Minjun Kim",
-						Country:      "KR",
-						AddressLine1: "1 Teheran-ro, Gangnam-gu",
-						AddressState: "Seoul",
-						PostalCode:   "06141",
-					},
-					PaymentCard: plus.PaymentCardConfig{
-						BINs: []string{"625817", "624441"},
-					},
-				},
-				syncInterval:    300 * time.Second,
-				syncConcurrency: 8,
-			},
+			wantErr: "account.purchase.revenuecat_bearer_key is required when purchase is enabled",
 		},
 		{
-			name: "top up enabled accepts payment card prefixes without toggle",
+			name: "reject legacy payment card config",
 			body: `
 api_key = "k"
 data_dir = "/tmp/data"
@@ -396,49 +320,36 @@ bins = ["625817", "624441"]
 
 [account.purchase]
 enabled = true
-plan_name = "chatgptplusplan"
-currency = "KRW"
-promo_campaign_id = "plus-1-month-free"
-checkout_ui_mode = "custom"
-
-[account.purchase.billing]
-name = "Minjun Kim"
-country = "KR"
-address_line1 = "1 Teheran-ro, Gangnam-gu"
-address_city = "Seoul"
-address_state = "Seoul"
-postal_code = "06141"
 `,
-			want: appConfig{
-				apiKey:             "k",
-				dataDir:            "/tmp/data",
-				port:               8080,
-				topUpEnabled:       true,
-				minTrackedAccounts: 0,
-				registerWorkers:    1,
-				registerTimeout:    60 * time.Second,
-				proxyPool:          plus.RegistrationProxyPool{"http://proxy-default"},
-				purchaseConfig: plus.PurchaseConfig{
-					Enabled:         true,
-					PlanName:        "chatgptplusplan",
-					Currency:        "KRW",
-					PromoCampaignID: "plus-1-month-free",
-					CheckoutUIMode:  "custom",
-						Billing: plus.PurchaseBillingConfig{
-							Name:         "Minjun Kim",
-							Country:      "KR",
-							AddressLine1: "1 Teheran-ro, Gangnam-gu",
-							AddressCity:  "Seoul",
-							AddressState: "Seoul",
-							PostalCode:   "06141",
-						},
-					PaymentCard: plus.PaymentCardConfig{
-						BINs: []string{"625817", "624441"},
-					},
-				},
-				syncInterval:    300 * time.Second,
-				syncConcurrency: 8,
-			},
+			wantErr: "unknown config keys",
+		},
+		{
+			name: "reject legacy purchase fields",
+			body: `
+api_key = "k"
+data_dir = "/tmp/data"
+
+[server]
+port = 8080
+
+[top_up]
+enabled = true
+min_tracked_accounts = 0
+register_workers = 1
+register_timeout_seconds = 60
+
+[sync]
+usage_sync_interval_seconds = 300
+usage_sync_concurrency = 8
+
+[account]
+registration_proxy_pool = ["http://proxy-default"]
+
+[account.purchase]
+enabled = true
+plan_name = "chatgptplusplan"
+`,
+			wantErr: "unknown config keys",
 		},
 		{
 			name: "top up enabled allows purchase disabled",

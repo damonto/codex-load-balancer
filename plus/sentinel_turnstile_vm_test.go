@@ -3,10 +3,11 @@ package plus
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
-	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -17,9 +18,9 @@ func TestTurnstileSolverFixtures(t *testing.T) {
 		load       func(t *testing.T) (string, string)
 	}{
 		{
-			name:       "legacy fixture from reversed sample",
-			wantSHA256: "a6d747017e2235157e506823171a1fbff15aa38228ac1c476e714c5862af6bf6",
-			load:       loadLegacyTurnstileFixture,
+			name:       "self contained fixture",
+			wantSHA256: "63daef30c24df9b4ed06f0af2b23ea32fd8e11b9f0ff2597acfd23f3c335a60b",
+			load:       loadSyntheticTurnstileFixture,
 		},
 		{
 			name:       "current fixture from captured sentinel input",
@@ -56,18 +57,34 @@ func TestTurnstileSolverFixtures(t *testing.T) {
 	}
 }
 
-func loadLegacyTurnstileFixture(t *testing.T) (string, string) {
+func loadSyntheticTurnstileFixture(t *testing.T) (string, string) {
 	t.Helper()
-	body, err := os.ReadFile("turnstile-reversed/generate_turnstile.py")
+
+	proofPayload, err := json.Marshal([]any{})
 	if err != nil {
-		t.Fatalf("read legacy fixture: %v", err)
+		t.Fatalf("marshal proof payload: %v", err)
 	}
-	keyMatch := regexp.MustCompile(`(?m)^key = "([^"]+)"`).FindSubmatch(body)
-	dxMatch := regexp.MustCompile(`(?m)^t = "([^"]+)"`).FindSubmatch(body)
-	if len(keyMatch) != 2 || len(dxMatch) != 2 {
-		t.Fatalf("parse legacy fixture: key=%d dx=%d", len(keyMatch), len(dxMatch))
+	proof := "gAAAAAC" + base64.StdEncoding.EncodeToString(proofPayload)
+
+	token := strings.Repeat("A", 160)
+	thirdProgram := []any{
+		[]any{2, 1, token},
 	}
-	return string(dxMatch[1]), string(keyMatch[1])
+	secondProgram := make([]any, 0, 11)
+	for range 10 {
+		secondProgram = append(secondProgram, []any{0})
+	}
+	secondProgram = append(secondProgram, []any{2, 2, thirdProgram})
+	firstProgram := []any{
+		[]any{2, 100, secondProgram},
+	}
+
+	body, err := json.Marshal(firstProgram)
+	if err != nil {
+		t.Fatalf("marshal synthetic fixture: %v", err)
+	}
+	dx := base64.StdEncoding.EncodeToString([]byte(xorString(string(body), proof)))
+	return dx, proof
 }
 
 func loadCurrentTurnstileFixture(t *testing.T) (string, string) {

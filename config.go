@@ -53,31 +53,13 @@ type fileSyncConfig struct {
 }
 
 type fileAccountConfig struct {
-	RegistrationProxyPool []string              `toml:"registration_proxy_pool"`
-	PaymentCard           filePaymentCardConfig `toml:"payment_card"`
-	Purchase              filePurchaseConfig    `toml:"purchase"`
-}
-
-type filePaymentCardConfig struct {
-	BINs []string `toml:"bins"`
+	RegistrationProxyPool []string           `toml:"registration_proxy_pool"`
+	Purchase              filePurchaseConfig `toml:"purchase"`
 }
 
 type filePurchaseConfig struct {
-	Enabled         *bool               `toml:"enabled"`
-	PlanName        string              `toml:"plan_name"`
-	Currency        string              `toml:"currency"`
-	PromoCampaignID string              `toml:"promo_campaign_id"`
-	CheckoutUIMode  string              `toml:"checkout_ui_mode"`
-	Billing         filePurchaseBilling `toml:"billing"`
-}
-
-type filePurchaseBilling struct {
-	Name         string `toml:"name"`
-	Country      string `toml:"country"`
-	AddressLine1 string `toml:"address_line1"`
-	AddressCity  string `toml:"address_city"`
-	AddressState string `toml:"address_state"`
-	PostalCode   string `toml:"postal_code"`
+	Enabled             *bool  `toml:"enabled"`
+	RevenueCatBearerKey string `toml:"revenuecat_bearer_key"`
 }
 
 func loadAppConfigFile(path string) (appConfig, error) {
@@ -118,6 +100,9 @@ func loadAppConfigFile(path string) (appConfig, error) {
 	if fc.Account.Purchase.Enabled == nil {
 		return appConfig{}, errors.New("account.purchase.enabled is required")
 	}
+	if *fc.Account.Purchase.Enabled && strings.TrimSpace(fc.Account.Purchase.RevenueCatBearerKey) == "" {
+		return appConfig{}, errors.New("account.purchase.revenuecat_bearer_key is required when purchase is enabled")
+	}
 
 	cfg := appConfig{
 		apiKey:             fc.APIKey,
@@ -128,22 +113,8 @@ func loadAppConfigFile(path string) (appConfig, error) {
 		minTrackedAccounts: *fc.TopUp.MinTrackedAccounts,
 		registerTimeout:    time.Duration(*fc.TopUp.RegisterTimeoutSeconds) * time.Second,
 		purchaseConfig: plus.PurchaseConfig{
-			Enabled:         *fc.Account.Purchase.Enabled,
-			PlanName:        fc.Account.Purchase.PlanName,
-			Currency:        fc.Account.Purchase.Currency,
-			PromoCampaignID: fc.Account.Purchase.PromoCampaignID,
-			CheckoutUIMode:  fc.Account.Purchase.CheckoutUIMode,
-				Billing: plus.PurchaseBillingConfig{
-					Name:         fc.Account.Purchase.Billing.Name,
-					Country:      fc.Account.Purchase.Billing.Country,
-					AddressLine1: fc.Account.Purchase.Billing.AddressLine1,
-					AddressCity:  fc.Account.Purchase.Billing.AddressCity,
-				AddressState: fc.Account.Purchase.Billing.AddressState,
-				PostalCode:   fc.Account.Purchase.Billing.PostalCode,
-			},
-			PaymentCard: plus.PaymentCardConfig{
-				BINs: fc.Account.PaymentCard.BINs,
-			},
+			Enabled:             *fc.Account.Purchase.Enabled,
+			RevenueCatBearerKey: strings.TrimSpace(fc.Account.Purchase.RevenueCatBearerKey),
 		},
 		syncInterval:    time.Duration(*fc.Sync.UsageSyncIntervalSeconds) * time.Second,
 		syncConcurrency: *fc.Sync.UsageSyncConcurrency,

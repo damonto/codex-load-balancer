@@ -106,7 +106,9 @@ func TestNormalizeOptions(t *testing.T) {
 				DataDir:               "/tmp/data",
 				RegistrationProxyPool: RegistrationProxyPool{"http://proxy-a"},
 				Purchase: PurchaseConfig{
-					Enabled: true,
+					Enabled:             true,
+					RevenueCatBearerKey: "goog_test_key",
+					Store:               &PurchaseTokenStore{},
 				},
 			},
 			want: RegisterOptions{
@@ -115,9 +117,35 @@ func TestNormalizeOptions(t *testing.T) {
 				OTPPoll:               defaultOTPPoll,
 				RegistrationProxyPool: RegistrationProxyPool{"http://proxy-a"},
 				Purchase: PurchaseConfig{
-					Enabled: true,
+					Enabled:             true,
+					RevenueCatBearerKey: "goog_test_key",
+					Store:               &PurchaseTokenStore{},
 				},
 			},
+		},
+		{
+			name: "reject enabled purchase without bearer key",
+			opts: RegisterOptions{
+				DataDir:               "/tmp/data",
+				RegistrationProxyPool: RegistrationProxyPool{"http://proxy-a"},
+				Purchase: PurchaseConfig{
+					Enabled: true,
+					Store:   &PurchaseTokenStore{},
+				},
+			},
+			wantErr: "purchase revenuecat bearer key is empty",
+		},
+		{
+			name: "reject enabled purchase without token store",
+			opts: RegisterOptions{
+				DataDir:               "/tmp/data",
+				RegistrationProxyPool: RegistrationProxyPool{"http://proxy-a"},
+				Purchase: PurchaseConfig{
+					Enabled:             true,
+					RevenueCatBearerKey: "goog_test_key",
+				},
+			},
+			wantErr: "purchase token store is nil",
 		},
 	}
 
@@ -148,21 +176,8 @@ func TestNormalizeOptions(t *testing.T) {
 
 func validPurchaseConfigForTest() PurchaseConfig {
 	return PurchaseConfig{
-		Enabled:         true,
-		PlanName:        "chatgptplusplan",
-		Currency:        "KRW",
-		PromoCampaignID: "plus-1-month-free",
-		CheckoutUIMode:  "custom",
-		Billing: PurchaseBillingConfig{
-			Name:         "Minjun Kim",
-			Country:      "KR",
-			AddressLine1: "1 Teheran-ro, Gangnam-gu",
-			AddressCity:  "Seoul",
-			AddressState: "Seoul",
-			PostalCode:   "06141",
-		},
-		PaymentCard: PaymentCardConfig{
-			BINs: []string{"625817", "624441"},
-		},
+		Enabled:             true,
+		RevenueCatBearerKey: "goog_test_key",
+		Store:               &PurchaseTokenStore{},
 	}
 }

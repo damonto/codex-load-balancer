@@ -7,29 +7,58 @@ import (
 	"log/slog"
 )
 
-func (r *registrationFlow) execute(ctx context.Context) (RegisterResult, error) {
-	result, err := r.prepareAccountProfile(ctx)
+var (
+	executePrepareAccountProfile = func(r *registrationFlow, ctx context.Context) (RegisterResult, error) {
+		return r.prepareAccountProfile(ctx)
+	}
+	executeCompleteRegistrationFlow = func(r *registrationFlow, ctx context.Context) (ChatGPTSession, error) {
+		return r.completeRegistrationFlow(ctx)
+	}
+	executeNewPurchase = func(client purchaseHTTPClient, session ChatGPTSession, cfg PurchaseConfig, lease *PurchaseTokenLease) *Purchase {
+		return NewPurchase(client, session, cfg, lease)
+	}
+	executeCompleteCodexLoginFlow = func(r *registrationFlow, ctx context.Context) (AuthTokens, string, error) {
+		return r.completeCodexLoginFlow(ctx)
+	}
+	executeSaveCredentialFile = func(r *registrationFlow, result RegisterResult) (string, error) {
+		return r.saveCredentialFile(result)
+	}
+)
+
+func (r *registrationFlow) execute(ctx context.Context) (result RegisterResult, err error) {
+	result, err = executePrepareAccountProfile(r, ctx)
 	if err != nil {
 		return RegisterResult{}, err
 	}
+	if err := r.reservePurchaseToken(ctx); err != nil {
+		return RegisterResult{}, fmt.Errorf("reserve purchase token: %w", err)
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if releaseErr := r.releaseReservedPurchaseToken(ctx); releaseErr != nil {
+			slog.Warn("release purchase token", "err", releaseErr)
+		}
+	}()
 
-	session, err := r.completeRegistrationFlow(ctx)
+	session, err := executeCompleteRegistrationFlow(r, ctx)
 	if err != nil {
 		return RegisterResult{}, err
 	}
 	result.Session = session
 
 	if r.cfg.Purchase.Enabled {
-		purchase := NewPurchase(r.client, session, r.cfg.Purchase)
+		purchase := executeNewPurchase(r.client, session, r.cfg.Purchase, r.purchaseTokenLease)
 		if err := purchase.Checkout(ctx); err != nil {
 			return RegisterResult{}, fmt.Errorf("checkout: %w", err)
 		}
-		slog.Info("purchase completed", "email", r.email, "account_id", session.Account.ID)
+		slog.Info("purchase step finished", "email", r.email, "account_id", session.Account.ID, "purchase_token_id", r.purchaseTokenLease.ID())
 	} else {
 		slog.Info("purchase skipped", "email", r.email, "account_id", session.Account.ID)
 	}
 
-	token, accountID, err := r.completeCodexLoginFlow(ctx)
+	token, accountID, err := executeCompleteCodexLoginFlow(r, ctx)
 	if err != nil {
 		return RegisterResult{}, err
 	}
@@ -37,7 +66,7 @@ func (r *registrationFlow) execute(ctx context.Context) (RegisterResult, error) 
 	result.Tokens = token
 	slog.Info("codex oauth completed", "email", r.email, "account_id", accountID)
 
-	path, err := r.saveCredentialFile(result)
+	path, err := executeSaveCredentialFile(r, result)
 	if err != nil {
 		return RegisterResult{}, fmt.Errorf("save credential file: %w", err)
 	}
@@ -45,6 +74,28 @@ func (r *registrationFlow) execute(ctx context.Context) (RegisterResult, error) 
 	slog.Info("credential file saved", "email", r.email, "file", path)
 
 	return result, nil
+}
+
+func (r *registrationFlow) reservePurchaseToken(ctx context.Context) error {
+	if !r.cfg.Purchase.Enabled {
+		return nil
+	}
+	lease, err := r.cfg.Purchase.Store.LeaseToken(ctx)
+	if err != nil {
+		return err
+	}
+	r.purchaseTokenLease = lease
+	slog.Info("purchase token leased", "purchase_token_id", lease.ID())
+	return nil
+}
+
+func (r *registrationFlow) releaseReservedPurchaseToken(ctx context.Context) error {
+	if r.purchaseTokenLease == nil {
+		return nil
+	}
+	cleanupCtx, cancel := cleanupContext(ctx)
+	defer cancel()
+	return r.purchaseTokenLease.Release(cleanupCtx)
 }
 
 func (r *registrationFlow) prepareAccountProfile(ctx context.Context) (RegisterResult, error) {
