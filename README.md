@@ -5,7 +5,7 @@ Codex load balancer is a pragmatic reverse proxy and load balancer for Codex. It
 ## Features
 
 - Token directory scan on startup and hot reload (polling).
-- Usage sync at startup and every minute.
+- Usage sync at startup and every 5 minutes by default.
 - Load balancing with weekly limit priority and 5-hour health degradation.
 - Session stickiness via common headers.
 - Automatic failover on rate limit responses.
@@ -27,85 +27,28 @@ go build -o codex-load-balancer .
 ## Run
 
 ```bash
-cp config.toml.example config.toml
-# edit config.toml
-./codex-load-balancer --config ./config.toml
+./codex-load-balancer \
+  --api-key your-api-key \
+  --data-dir ./data \
+  --port 8080 \
+  --sync-interval 5m \
+  --sync-concurrency 8
 ```
 
-Startup flag:
+Flags:
 
-- `--config` (optional): TOML config path (default `./config.toml`).
-
-`config.toml` keys:
-
-- `api_key` (required): API key for protected interfaces.
-- `data_dir` (required): Directory containing active `*.json` auth files.
-- `server.port` (required): Listen port.
-- `top_up.enabled` (required): Whether to auto register replacement accounts for startup top-up and post-removal top-up.
-- `top_up.min_tracked_accounts` (required): Background top-up target based on active account count.
-- `top_up.register_workers` (required): Concurrent registration workers for startup/runtime top-up.
-- `top_up.register_timeout_seconds` (required): Per-registration timeout.
-- `sync.usage_sync_interval_seconds` (required): Usage sync interval.
-- `sync.usage_sync_concurrency` (required): Usage sync concurrency.
-- `account.registration_proxy_pool` (required): Registration proxy pool for account top-up.
-- `account.purchase.enabled` (required): Whether account registration should run the RevenueCat purchase step.
-- `account.purchase.revenuecat_bearer_key` (required when `account.purchase.enabled = true`): Bearer key used for `POST https://api.revenuecat.com/v1/receipts`.
-
-Current example:
-
-```toml
-api_key = "your-api-key"
-data_dir = "/app/data"
-
-[server]
-port = 8080
-
-[top_up]
-enabled = true
-min_tracked_accounts = 0
-register_workers = 5
-register_timeout_seconds = 360
-
-[sync]
-usage_sync_interval_seconds = 300
-usage_sync_concurrency = 8
-
-[account]
-registration_proxy_pool = [
-  "http://user-session-%s:pass@proxy.example.com:7777",
-]
-
-[account.purchase]
-enabled = false
-# revenuecat_bearer_key = "goog_your_revenuecat_key"
-```
+- `--api-key` (required): API key for protected proxy endpoints.
+- `--data-dir` (required): Directory containing active `*.json` auth files.
+- `--data-key` (optional): Alias for `--data-dir`.
+- `--port` (optional): Listen port. Default `8080`.
+- `--server-port` (optional): Alias for `--port`.
+- `--sync-interval` (optional): Usage sync interval. Default `5m`.
+- `--sync-concurrency` (optional): Usage sync concurrency. Default `8`.
 
 Notes:
 
-- Unknown config keys cause startup failure.
-- `top_up.enabled = false` disables both startup top-up and replacement account registration after `401` / downgraded accounts are removed.
-- `account.registration_proxy_pool` must contain at least one non-empty proxy URL.
-- `account.purchase.enabled = false` skips purchase, still completes Codex OAuth, writes the Codex credential JSON, and usage sync no longer removes accounts just because `plan_type=free`.
-- When `account.purchase.enabled = true`, the service reuses `data/clb.db`, creates the `purchase_tokens` table there, leases one queued `fetch_token` before signup, posts the RevenueCat purchase after ChatGPT account creation, and only then continues to Codex OAuth.
-- RevenueCat purchase retries only on HTTP `5xx`. HTTP `4xx`, transport errors, and timeouts mark that token as dead because one-time-use state is ambiguous after send.
-- When `data/tokens.txt` exists, the service imports it into the `purchase_tokens` table inside `data/clb.db` at startup and every 10 seconds. Use one `fetch_token` per line; blank lines and `#` comments are ignored.
-- If a proxy entry contains `%s`, each registration attempt replaces it with a fresh random `session_id`.
-
-Manual `fetch_token` queue management:
-
-```bash
-sqlite3 data/clb.db "INSERT INTO purchase_tokens (fetch_token, status) VALUES ('FETCH_TOKEN_HERE', 'available');"
-sqlite3 data/clb.db "SELECT id, status, attempt_count, account_id, response_status_code, last_error, created_at_unix FROM purchase_tokens ORDER BY id;"
-```
-
-File-based `fetch_token` queue input:
-
-```bash
-cat >> data/tokens.txt <<'EOF'
-FETCH_TOKEN_1
-FETCH_TOKEN_2
-EOF
-```
+- Usage sync and dashboard state are stored in `data-dir/clb.db`.
+- The service no longer reads a TOML config file.
 
 ## Token File Format
 
@@ -161,8 +104,7 @@ If the upstream responds with status `429` or contains `"You've hit your usage l
 - Uses `https://chatgpt.com/backend-api/wham/usage`.
 - Account metadata shown in the dashboard, including `email` and `plan_type`, comes from the usage response in real time.
 - Before proxying or syncing usage, Codex load balancer refreshes stale access tokens from the stored refresh token.
-- On `401`, Codex load balancer refreshes once and retries. If the token still stays unauthorized during usage sync, it removes the credential file, evicts the token from memory, and tops up the same count with new registrations.
-- If usage reports `plan_type=free`, Codex load balancer removes the account only when `account.purchase.enabled = true`.
+- On `401`, Codex load balancer refreshes once and retries. If the token still stays unauthorized during usage sync, it removes the credential file and evicts the token from memory.
 
 ## Dashboard
 

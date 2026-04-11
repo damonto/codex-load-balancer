@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,11 +10,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
-
-	"github.com/damonto/codex-load-balancer/plus"
 )
 
 const usageSinkBufferSize = 2048
@@ -23,36 +19,26 @@ const usageSinkBufferSize = 2048
 var BuildVersion string
 
 type appRuntime struct {
-	store         *TokenStore
-	usageDB       *UsageDB
-	usageSink     *UsageSink
-	purchaseStore *plus.PurchaseTokenStore
+	store     *TokenStore
+	usageDB   *UsageDB
+	usageSink *UsageSink
 }
 
 func main() {
 	slog.Info("starting codex load balancer", "build_version", BuildVersion)
 
-	configPath := parseConfigPath()
-	cfg, err := loadAppConfigFile(configPath)
+	cfg, err := parseAppConfig(os.Args[1:], os.Stderr)
 	if err != nil {
-		slog.Error("load config", "err", err)
+		if errors.Is(err, errHelpRequested) {
+			os.Exit(0)
+		}
+		slog.Error("parse flags", "err", err)
 		os.Exit(1)
 	}
 	if err := run(cfg); err != nil {
 		slog.Error("run", "err", err)
 		os.Exit(1)
 	}
-}
-
-func parseConfigPath() string {
-	var path string
-	flag.StringVar(&path, "config", defaultConfigPath, "path to TOML config file")
-	flag.Parse()
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return defaultConfigPath
-	}
-	return path
 }
 
 func run(cfg appConfig) error {
@@ -85,18 +71,27 @@ func run(cfg appConfig) error {
 
 func validateAppConfig(cfg appConfig) error {
 	if cfg.apiKey == "" {
-		return errors.New("api_key is required")
+		return errors.New("api-key is required")
 	}
 	if cfg.dataDir == "" {
-		return errors.New("data_dir is required")
+		return errors.New("data-dir is required")
+	}
+	if cfg.port <= 0 {
+		return errors.New("port must be positive")
+	}
+	if cfg.syncInterval <= 0 {
+		return errors.New("sync-interval must be positive")
+	}
+	if cfg.syncConcurrency <= 0 {
+		return errors.New("sync-concurrency must be positive")
 	}
 
 	info, err := os.Stat(cfg.dataDir)
 	if err != nil {
-		return fmt.Errorf("stat data_dir: %w", err)
+		return fmt.Errorf("stat data-dir: %w", err)
 	}
 	if !info.IsDir() {
-		return errors.New("data_dir is not a directory")
+		return errors.New("data-dir is not a directory")
 	}
 	return nil
 }
@@ -113,21 +108,10 @@ func bootstrapRuntime(cfg *appConfig) (*appRuntime, error) {
 		return nil, fmt.Errorf("open usage db %q: %w", usageDBPath, err)
 	}
 
-	var purchaseStore *plus.PurchaseTokenStore
-	if cfg.purchaseConfig.Enabled {
-		purchaseStore, err = plus.NewPurchaseTokenStore(usageDB.db)
-		if err != nil {
-			usageDB.Close()
-			return nil, fmt.Errorf("init purchase tables in usage db %q: %w", usageDBPath, err)
-		}
-		cfg.purchaseConfig.Store = purchaseStore
-	}
-
 	return &appRuntime{
-		store:         store,
-		usageDB:       usageDB,
-		usageSink:     NewUsageSink(usageDB, usageSinkBufferSize),
-		purchaseStore: purchaseStore,
+		store:     store,
+		usageDB:   usageDB,
+		usageSink: NewUsageSink(usageDB, usageSinkBufferSize),
 	}, nil
 }
 
@@ -140,34 +124,11 @@ func closeRuntime(rt *appRuntime) {
 
 func startBackgroundWorkers(ctx context.Context, cfg appConfig, store *TokenStore) {
 	go runTokenWatcher(ctx, store, cfg.dataDir)
-	if cfg.purchaseConfig.Enabled && cfg.purchaseConfig.Store != nil {
-		if err := importPurchaseTokensFromFile(ctx, cfg.dataDir, cfg.purchaseConfig.Store); err != nil && ctx.Err() == nil {
-			slog.Warn("initial purchase token import", "err", err)
-		}
-		go runPurchaseTokenFileWatcher(ctx, cfg.dataDir, cfg.purchaseConfig.Store)
-	}
-	topUpOpts := topUpOptions{
-		Enabled:         cfg.topUpEnabled,
-		TargetCount:     cfg.minTrackedAccounts,
-		RegisterWorkers: cfg.registerWorkers,
-		RegisterTimeout: cfg.registerTimeout,
-		ProxyPool:       cfg.proxyPool,
-		PurchaseConfig:  cfg.purchaseConfig,
-	}
 	usageURL := backendEndpoint(defaultBackendAPIURL, "/wham/usage")
-	go runUsageSyncer(ctx, store, cfg.dataDir, usageURL, usageSyncOptions{
+	go runUsageSyncer(ctx, store, usageURL, usageSyncOptions{
 		Interval:    cfg.syncInterval,
 		Concurrency: cfg.syncConcurrency,
-	}, topUpOpts)
-	if !cfg.topUpEnabled || cfg.minTrackedAccounts == 0 {
-		return
-	}
-
-	go func() {
-		if err := topUpAccounts(ctx, store, cfg.dataDir, topUpOpts); err != nil && ctx.Err() == nil {
-			slog.Warn("startup account top-up", "err", err)
-		}
-	}()
+	})
 }
 
 func newHTTPServer(cfg appConfig, rt *appRuntime) (*http.Server, error) {

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,7 +16,7 @@ type usageSyncOptions struct {
 	Concurrency int
 }
 
-func runUsageSyncer(ctx context.Context, store *TokenStore, dataDir string, usageURL string, syncOpts usageSyncOptions, topUpOpts topUpOptions) {
+func runUsageSyncer(ctx context.Context, store *TokenStore, usageURL string, syncOpts usageSyncOptions) {
 	if syncOpts.Interval <= 0 {
 		slog.Error("usage sync disabled", "reason", "interval must be positive")
 		return
@@ -27,7 +26,7 @@ func runUsageSyncer(ctx context.Context, store *TokenStore, dataDir string, usag
 		return
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
-	syncUsageOnce(ctx, store, client, dataDir, usageURL, syncOpts, topUpOpts)
+	syncUsageOnce(ctx, store, client, usageURL, syncOpts)
 	ticker := time.NewTicker(syncOpts.Interval)
 	defer ticker.Stop()
 	for {
@@ -36,11 +35,11 @@ func runUsageSyncer(ctx context.Context, store *TokenStore, dataDir string, usag
 			return
 		case <-ticker.C:
 		}
-		syncUsageOnce(ctx, store, client, dataDir, usageURL, syncOpts, topUpOpts)
+		syncUsageOnce(ctx, store, client, usageURL, syncOpts)
 	}
 }
 
-func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, dataDir string, usageURL string, syncOpts usageSyncOptions, topUpOpts topUpOptions) {
+func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, usageURL string, syncOpts usageSyncOptions) {
 	refs := store.TokenRefs()
 	if len(refs) == 0 {
 		return
@@ -57,7 +56,7 @@ func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, 
 		go func(ref TokenRef) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if syncOneToken(ctx, store, client, usageURL, ref, topUpOpts.PurchaseConfig.Enabled) {
+			if syncOneToken(ctx, store, client, usageURL, ref) {
 				removedCount.Add(1)
 			}
 		}(ref)
@@ -70,20 +69,9 @@ func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, 
 	}
 
 	slog.Warn("usage sync removed tokens", "removed", n)
-	if !topUpOpts.Enabled {
-		return
-	}
-	opts := topUpOpts
-	target := store.ValidAccountCount() + n
-	if opts.TargetCount < target {
-		opts.TargetCount = target
-	}
-	if err := topUpAccounts(ctx, store, dataDir, opts); err != nil && ctx.Err() == nil {
-		slog.Warn("usage sync account top-up", "removed", n, "target", opts.TargetCount, "err", err)
-	}
 }
 
-func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, usageURL string, ref TokenRef, removeFreePlan bool) bool {
+func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, usageURL string, ref TokenRef) bool {
 	refreshed, refreshErr := maybeRefreshTokenIfStale(ctx, store, ref.ID, defaultProxyRefreshConfig())
 	if refreshErr != nil {
 		slog.Warn("token refresh failed during usage sync", "token", ref.ID, "err", refreshErr)
@@ -114,9 +102,6 @@ func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, u
 		}
 		slog.Warn("usage sync failed", "token", ref.ID, "err", err)
 		return false
-	}
-	if removeFreePlan && strings.EqualFold(snapshot.PlanType, "free") {
-		return removeTokenAndFile(store, ref.ID, "free_plan")
 	}
 	if !snapshot.FiveHour.Known && !snapshot.Weekly.Known {
 		slog.Warn("usage sync missing quota windows", "token", ref.ID)

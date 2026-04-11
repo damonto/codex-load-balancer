@@ -19,4 +19,4 @@ RUN set -eux \
 	&& apk add --no-cache libcurl \
 	&& mkdir -p /app/data
 
-ENTRYPOINT ["/app/codex-load-balancer", "--config", "/app/config.toml"]
+ENTRYPOINT ["/app/codex-load-balancer"]
