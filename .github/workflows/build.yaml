@@ -46,6 +46,7 @@ jobs:
       - name: Upload ${{ matrix.target.name }} to Artifact
         uses: actions/upload-artifact@v7
         with:
+          retention-days: 7
           name: codex-load-balancer-${{ matrix.target.name }}
           path: codex-load-balancer-${{ matrix.target.name }}
 

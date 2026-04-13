@@ -135,6 +135,12 @@ func (s *TokenStore) ShouldReload(path string, modTime time.Time) bool {
 	return modTime.After(last)
 }
 
+func (s *TokenStore) NoteFileMod(path string, modTime time.Time) {
+	s.mu.Lock()
+	s.fileMod[path] = modTime
+	s.mu.Unlock()
+}
+
 func (s *TokenStore) UpsertToken(token TokenState, modTime time.Time) (added bool, updated bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -409,6 +415,21 @@ func (s *TokenStore) availableCandidates(now time.Time, tried map[string]bool) [
 	}
 	s.mu.RUnlock()
 	return candidates
+}
+
+func (s *TokenStore) HasAvailableToken(tried map[string]bool) bool {
+	now := time.Now()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, token := range s.tokens {
+		if tried[token.ID] {
+			continue
+		}
+		if token.Available(now) {
+			return true
+		}
+	}
+	return false
 }
 
 func selectBestCandidate(candidates []TokenCandidate) TokenState {

@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	refreshTokenURL      = "https://auth.openai.com/oauth/token"
 	refreshClientID      = "app_EMoamEEZ73f0CkXaXp7hrann"
 	refreshScope         = "openid profile email"
 	defaultRefreshWindow = 8 * 24 * time.Hour

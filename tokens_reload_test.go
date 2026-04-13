@@ -221,6 +221,55 @@ func TestTokenStoreUpsertTokenPreservesUsageMetadataOnReload(t *testing.T) {
 	}
 }
 
+func TestLoadTokensFromDirRemovesCachedTokenWhenFileTurnsInvalid(t *testing.T) {
+	tests := []struct {
+		name        string
+		invalidData string
+	}{
+		{
+			name:        "invalid json",
+			invalidData: `{"tokens":`,
+		},
+		{
+			name:        "missing access token",
+			invalidData: `{"tokens":{"refresh_token":"still-here"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewTokenStore()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "active.json")
+			writeTokenSessionFileForTest(t, path, "token-active")
+
+			if err := loadTokensFromDir(store, dir); err != nil {
+				t.Fatalf("loadTokensFromDir() initial error = %v", err)
+			}
+			store.SetSession("session-active", "active.json")
+
+			if err := os.WriteFile(path, []byte(tt.invalidData), 0o644); err != nil {
+				t.Fatalf("write invalid auth file: %v", err)
+			}
+			modTime := time.Now().UTC().Add(2 * time.Second)
+			if err := os.Chtimes(path, modTime, modTime); err != nil {
+				t.Fatalf("Chtimes() error = %v", err)
+			}
+
+			if err := loadTokensFromDir(store, dir); err != nil {
+				t.Fatalf("loadTokensFromDir() second error = %v", err)
+			}
+
+			if _, ok := store.TokenSnapshot("active.json"); ok {
+				t.Fatal("token should be removed from store after invalid reload")
+			}
+			if _, ok := store.SessionToken("session-active"); ok {
+				t.Fatal("session should be cleared after invalid reload")
+			}
+		})
+	}
+}
+
 func writeTokenSessionFileForTest(t *testing.T, path string, accessToken string) {
 	t.Helper()
 	payload := map[string]any{

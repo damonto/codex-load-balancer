@@ -51,9 +51,15 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tried := make(map[string]bool)
+	var retryResp *http.Response
+	var retryBody []byte
 	for attempt := range 2 {
 		token, sticky, err := s.store.SelectToken(sessionID, tried)
 		if err != nil {
+			if retryResp != nil {
+				writeResponse(w, retryResp, retryBody)
+				return
+			}
 			http.Error(w, "no available tokens", http.StatusServiceUnavailable)
 			return
 		}
@@ -108,10 +114,12 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			if sessionID != "" {
 				s.store.ClearSession(sessionID)
 			}
-			if attempt == 1 {
+			if attempt == 1 || !s.store.HasAvailableToken(tried) {
 				writeResponse(w, resp, respBody)
 				return
 			}
+			retryResp = resp
+			retryBody = respBody
 			continue
 		}
 
@@ -128,10 +136,12 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			if sessionID != "" {
 				s.store.ClearSession(sessionID)
 			}
-			if attempt == 1 {
+			if attempt == 1 || !s.store.HasAvailableToken(tried) {
 				writeResponse(w, resp, respBody)
 				return
 			}
+			retryResp = resp
+			retryBody = respBody
 			continue
 		}
 

@@ -54,7 +54,9 @@ func loadTokensFromDir(store *TokenStore, dir string) error {
 
 		token, accountID, refreshToken, lastRefresh, err := parseAuthFile(path)
 		if err != nil {
-			slog.Warn("token file parse", "path", path, "err", err)
+			_, removed := store.RemoveToken(entry.Name())
+			store.NoteFileMod(path, info.ModTime())
+			slog.Warn("token file parse", "path", path, "err", err, "cached_token_removed", removed)
 			continue
 		}
 		state := TokenState{

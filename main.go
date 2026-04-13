@@ -124,15 +124,14 @@ func closeRuntime(rt *appRuntime) {
 
 func startBackgroundWorkers(ctx context.Context, cfg appConfig, store *TokenStore) {
 	go runTokenWatcher(ctx, store, cfg.dataDir)
-	usageURL := backendEndpoint(defaultBackendAPIURL, "/wham/usage")
-	go runUsageSyncer(ctx, store, usageURL, usageSyncOptions{
+	go runUsageSyncer(ctx, store, usageEndpointURL, usageSyncOptions{
 		Interval:    cfg.syncInterval,
 		Concurrency: cfg.syncConcurrency,
 	})
 }
 
 func newHTTPServer(cfg appConfig, rt *appRuntime) (*http.Server, error) {
-	upstreamURL, err := url.Parse(backendEndpoint(defaultBackendAPIURL, "/codex"))
+	upstreamURL, err := url.Parse(codexEndpointURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse upstream URL: %w", err)
 	}

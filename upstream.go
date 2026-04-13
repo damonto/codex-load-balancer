@@ -13,16 +13,6 @@ import (
 	"strings"
 )
 
-const defaultBackendAPIURL = "https://chatgpt.com/backend-api"
-
-func backendEndpoint(baseURL string, path string) string {
-	base := strings.TrimRight(baseURL, "/")
-	if strings.HasPrefix(path, "/") {
-		return base + path
-	}
-	return base + "/" + path
-}
-
 func (s *Server) forwardRequest(r *http.Request, body []byte, token TokenState, path string) (*http.Response, []byte, bool, error) {
 	target := *s.upstreamURL
 	target.Path = joinURLPath(s.upstreamURL.Path, path)
@@ -44,13 +34,11 @@ func (s *Server) forwardRequestWithTarget(r *http.Request, body []byte, target u
 		return nil, nil, false, fmt.Errorf("build upstream request: %w", err)
 	}
 
-	req.Header = cloneHeaders(r.Header)
+	req.Header = cloneForwardHeaders(r.Header)
 	req.Header.Set("Authorization", authHeaderValue(authToken))
 	if accountID != "" && req.Header.Get("ChatGPT-Account-ID") == "" {
 		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
-	req.ContentLength = r.ContentLength
-	req.TransferEncoding = append([]string(nil), r.TransferEncoding...)
 	req.Host = target.Host
 
 	resp, err := s.client.Do(req)

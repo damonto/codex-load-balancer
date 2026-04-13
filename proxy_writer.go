@@ -4,11 +4,27 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/textproto"
+	"strings"
 )
 
 func cloneHeaders(in http.Header) http.Header {
 	out := make(http.Header, len(in))
 	for key, values := range in {
+		copied := make([]string, len(values))
+		copy(copied, values)
+		out[key] = copied
+	}
+	return out
+}
+
+func cloneForwardHeaders(in http.Header) http.Header {
+	skip := hopByHopHeaderNames(in)
+	out := make(http.Header, len(in))
+	for key, values := range in {
+		if _, ok := skip[key]; ok {
+			continue
+		}
 		copied := make([]string, len(values))
 		copy(copied, values)
 		out[key] = copied
@@ -59,8 +75,9 @@ func (fw flushWriter) Write(p []byte) (int, error) {
 }
 
 func copyHeaders(dst http.Header, src http.Header) {
+	skip := hopByHopHeaderNames(src)
 	for key, values := range src {
-		if hopByHopHeaders[key] {
+		if _, ok := skip[key]; ok {
 			continue
 		}
 		copied := make([]string, len(values))
@@ -69,15 +86,33 @@ func copyHeaders(dst http.Header, src http.Header) {
 	}
 }
 
+func hopByHopHeaderNames(headers http.Header) map[string]struct{} {
+	names := make(map[string]struct{}, len(hopByHopHeaders)+4)
+	for key := range hopByHopHeaders {
+		names[key] = struct{}{}
+	}
+	for _, value := range headers.Values("Connection") {
+		for part := range strings.SplitSeq(value, ",") {
+			name := textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(part))
+			if name == "" {
+				continue
+			}
+			names[name] = struct{}{}
+		}
+	}
+	return names
+}
+
 // hopByHopHeaders lists headers that must not be forwarded by a proxy (RFC 7230 §6.1).
 // These are connection-scoped and meaningful only for a single transport hop.
-var hopByHopHeaders = map[string]bool{
-	"Connection":          true,
-	"Keep-Alive":          true,
-	"Proxy-Authenticate":  true,
-	"Proxy-Authorization": true,
-	"Te":                  true,
-	"Trailers":            true,
-	"Transfer-Encoding":   true,
-	"Upgrade":             true,
+var hopByHopHeaders = map[string]struct{}{
+	"Connection":          {},
+	"Keep-Alive":          {},
+	"Proxy-Authenticate":  {},
+	"Proxy-Authorization": {},
+	"Proxy-Connection":    {},
+	"Te":                  {},
+	"Trailer":             {},
+	"Transfer-Encoding":   {},
+	"Upgrade":             {},
 }

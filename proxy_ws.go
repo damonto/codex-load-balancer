@@ -15,9 +15,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 	}
 
 	tried := make(map[string]bool)
+	var retryResp *http.Response
+	var retryBody []byte
 	for attempt := range 2 {
 		token, sticky, err := s.store.SelectToken(sessionID, tried)
 		if err != nil {
+			if retryResp != nil {
+				writeResponse(w, retryResp, retryBody)
+				return
+			}
 			http.Error(w, "no available tokens", http.StatusServiceUnavailable)
 			return
 		}
@@ -73,10 +79,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 			if sessionID != "" {
 				s.store.ClearSession(sessionID)
 			}
-			if attempt == 1 {
+			if attempt == 1 || !s.store.HasAvailableToken(tried) {
 				writeResponse(w, upstream.resp, upstream.body)
 				return
 			}
+			retryResp = upstream.resp
+			retryBody = upstream.body
 			continue
 		}
 
@@ -94,10 +102,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 			if sessionID != "" {
 				s.store.ClearSession(sessionID)
 			}
-			if attempt == 1 {
+			if attempt == 1 || !s.store.HasAvailableToken(tried) {
 				writeResponse(w, upstream.resp, upstream.body)
 				return
 			}
+			retryResp = upstream.resp
+			retryBody = upstream.body
 			continue
 		}
 
