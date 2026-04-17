@@ -89,6 +89,7 @@ func maybeRefreshTokenWithMode(ctx context.Context, store *TokenStore, tokenID s
 	if !ok {
 		return false, errors.New("token not found")
 	}
+	initialToken := token
 	if token.RefreshToken == "" {
 		return false, nil
 	}
@@ -108,10 +109,10 @@ func maybeRefreshTokenWithMode(ctx context.Context, store *TokenStore, tokenID s
 		return false, nil
 	}
 	if refreshIfStale && !tokenNeedsRefresh(token.LastRefresh, time.Now(), cfg.Interval) {
-		return false, nil
+		return tokenRefreshedSince(initialToken, token), nil
 	}
 	if !refreshIfStale && !token.LastRefresh.IsZero() && time.Since(token.LastRefresh) < cfg.Debounce {
-		return true, nil
+		return tokenRefreshedSince(initialToken, token), nil
 	}
 
 	accessToken, refreshToken, err := refreshAccessToken(ctx, token.RefreshToken)
@@ -128,6 +129,13 @@ func maybeRefreshTokenWithMode(ctx context.Context, store *TokenStore, tokenID s
 
 	store.UpdateCredentials(token.ID, accessToken, refreshToken)
 	return true, nil
+}
+
+func tokenRefreshedSince(before TokenState, after TokenState) bool {
+	if after.LastRefresh.After(before.LastRefresh) {
+		return true
+	}
+	return after.Token != before.Token
 }
 
 func tokenNeedsRefresh(lastRefresh time.Time, now time.Time, interval time.Duration) bool {

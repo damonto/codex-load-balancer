@@ -31,9 +31,7 @@
   </div>
 
   <script>
-    var detailsCache = {};
     var dashboardState = { payload: null, accounts: [] };
-    var detailsReqSeq = 0;
 
     function esc(v) {
       return String(v)
@@ -233,25 +231,6 @@
       root.innerHTML = html;
     }
 
-    async function syncDetails(accounts) {
-      if (!accounts || !accounts.length) return;
-      var reqID = ++detailsReqSeq;
-      var tasks = [];
-      for (var i = 0; i < accounts.length; i++) {
-        var key = accounts[i].account_key || '';
-        if (!key || detailsCache[key]) continue;
-        tasks.push((function (k) {
-          return fetch('stats/account?account_key=' + encodeURIComponent(k))
-            .then(function (r) { return r.json(); })
-            .then(function (d) { detailsCache[k] = d; })
-            .catch(function () { detailsCache[k] = {}; });
-        })(key));
-      }
-      if (tasks.length) await Promise.allSettled(tasks);
-      if (reqID !== detailsReqSeq) return;
-      renderAccounts(dashboardState.accounts);
-    }
-
     async function loadOverview() {
       var meta = document.getElementById('meta');
       meta.textContent = 'Loading...';
@@ -264,16 +243,12 @@
         renderPeriodCards(payload);
         renderAccounts(dashboardState.accounts);
         meta.textContent = 'Generated at ' + new Date(payload.generated_at).toLocaleString();
-        syncDetails(dashboardState.accounts);
       } catch (err) {
         meta.textContent = 'Load failed: ' + err.message;
       }
     }
 
-    document.getElementById('refreshBtn').addEventListener('click', function () {
-      detailsCache = {};
-      loadOverview();
-    });
+    document.getElementById('refreshBtn').addEventListener('click', loadOverview);
     loadOverview();
   </script>
 </body>

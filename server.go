@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
 
@@ -18,4 +20,29 @@ type Server struct {
 	apiKey      string
 	usageDB     *UsageDB
 	usageSink   *UsageSink
+
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
+	websocketWG    sync.WaitGroup
+}
+
+func (s *Server) beginShutdown() {
+	if s == nil || s.shutdownCancel == nil {
+		return
+	}
+	s.shutdownCancel()
+}
+
+func (s *Server) waitWebSockets() {
+	if s == nil {
+		return
+	}
+	s.websocketWG.Wait()
+}
+
+func (s *Server) shutdownContext() context.Context {
+	if s == nil || s.shutdownCtx == nil {
+		return context.Background()
+	}
+	return s.shutdownCtx
 }

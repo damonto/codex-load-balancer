@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"time"
 )
 
@@ -41,7 +43,8 @@ func (s *Server) recordTokenUsage(token TokenState, path string, statusCode int,
 	if accountKey == "" {
 		return
 	}
-	s.usageSink.Record(UsageRecord{
+
+	rec := UsageRecord{
 		AccountKey:      accountKey,
 		TokenID:         token.ID,
 		Path:            path,
@@ -52,7 +55,10 @@ func (s *Server) recordTokenUsage(token TokenState, path string, statusCode int,
 		OutputTokens:    usage.OutputTokens,
 		ReasoningTokens: usage.ReasoningTokens,
 		CreatedAt:       time.Now().UTC(),
-	})
+	}
+	if err := s.usageSink.Record(rec); err != nil && !errors.Is(err, errUsageSinkStopped) {
+		slog.Warn("queue usage record", "account", rec.AccountKey, "token", rec.TokenID, "err", err)
+	}
 }
 
 func accountKeyFromToken(token TokenState) string {

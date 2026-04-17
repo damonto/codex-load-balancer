@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -108,6 +109,65 @@ func TestCopyHeadersStripsHopByHopHeaders(t *testing.T) {
 			}
 			if got := dst.Get("X-Keep"); got != "keep-me" {
 				t.Fatalf("X-Keep = %q, want %q", got, "keep-me")
+			}
+		})
+	}
+}
+
+func TestForwardRequestWithTargetDecompressesInspectableResponses(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "gzip response body stays parseable for usage extraction",
+			body: `{"usage":{"input_tokens":12,"cached_input_tokens":3,"output_tokens":4}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !headerHasToken(r.Header.Get("Accept-Encoding"), "gzip") {
+					t.Fatalf("Accept-Encoding = %q, want gzip negotiation", r.Header.Get("Accept-Encoding"))
+				}
+				w.Header().Set("Content-Encoding", "gzip")
+				gz := gzip.NewWriter(w)
+				if _, err := gz.Write([]byte(tt.body)); err != nil {
+					t.Fatalf("gzip write: %v", err)
+				}
+				if err := gz.Close(); err != nil {
+					t.Fatalf("gzip close: %v", err)
+				}
+			}))
+			defer upstream.Close()
+
+			target, err := url.Parse(upstream.URL)
+			if err != nil {
+				t.Fatalf("url.Parse() error = %v", err)
+			}
+
+			server := &Server{client: upstream.Client()}
+			req := httptest.NewRequest(http.MethodPost, "http://proxy.local/responses", strings.NewReader(`{"ok":true}`))
+			req.Header.Set("Accept-Encoding", "gzip")
+
+			resp, body, stream, err := server.forwardRequestWithTarget(req, []byte(`{"ok":true}`), *target, "proxy-token", "")
+			if err != nil {
+				t.Fatalf("forwardRequestWithTarget() error = %v", err)
+			}
+			if stream {
+				t.Fatal("stream = true, want false")
+			}
+			if resp.Header.Get("Content-Encoding") != "" {
+				t.Fatalf("Content-Encoding = %q, want empty after transparent decompression", resp.Header.Get("Content-Encoding"))
+			}
+
+			usage, ok := extractTokenUsageFromBody(body)
+			if !ok {
+				t.Fatalf("extractTokenUsageFromBody(%q) = ok false, want true", string(body))
+			}
+			if usage.InputTokens != 9 || usage.CachedTokens != 3 || usage.OutputTokens != 4 {
+				t.Fatalf("usage = %+v, want input=9 cached=3 output=4", usage)
 			}
 		})
 	}

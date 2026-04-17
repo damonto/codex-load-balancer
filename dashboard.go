@@ -70,6 +70,17 @@ type dashboardAccountResponse struct {
 	Monthly         []UsagePoint `json:"monthly"`
 }
 
+type dashboardAccountsDetailsResponse struct {
+	Accounts []dashboardAccountDetails `json:"accounts"`
+}
+
+type dashboardAccountDetails struct {
+	AccountKey string       `json:"account_key"`
+	Daily      []UsagePoint `json:"daily"`
+	Weekly     []UsagePoint `json:"weekly"`
+	Monthly    []UsagePoint `json:"monthly"`
+}
+
 func handleDashboardAsset(w http.ResponseWriter, r *http.Request) {
 	dashboardAssetHandler.ServeHTTP(w, r)
 }
@@ -239,6 +250,46 @@ func (s *Server) handleDashboardAccount(w http.ResponseWriter, r *http.Request) 
 	enc := json.NewEncoder(w)
 	if err := enc.Encode(resp); err != nil {
 		slog.Warn("encode account dashboard", "account", accountKey, "err", err)
+	}
+}
+
+func (s *Server) handleDashboardAccountsDetails(w http.ResponseWriter, r *http.Request) {
+	if s.usageDB == nil {
+		http.Error(w, "usage database is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	activeAccounts := s.activeAccountTokens()
+	accountKeys := make([]string, 0, len(activeAccounts))
+	for accountKey := range activeAccounts {
+		accountKeys = append(accountKeys, accountKey)
+	}
+	slices.Sort(accountKeys)
+
+	trendsByAccount, err := s.usageDB.AccountTrendsBatch(r.Context(), accountKeys)
+	if err != nil {
+		slog.Warn("query account trends batch", "err", err)
+		http.Error(w, "query account trends batch", http.StatusInternalServerError)
+		return
+	}
+
+	accounts := make([]dashboardAccountDetails, 0, len(accountKeys))
+	for _, accountKey := range accountKeys {
+		trends := trendsByAccount[accountKey]
+		accounts = append(accounts, dashboardAccountDetails{
+			AccountKey: accountKey,
+			Daily:      trends.Daily,
+			Weekly:     trends.Weekly,
+			Monthly:    trends.Monthly,
+		})
+	}
+
+	resp := dashboardAccountsDetailsResponse{Accounts: accounts}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	enc := json.NewEncoder(w)
+	if err := enc.Encode(resp); err != nil {
+		slog.Warn("encode accounts dashboard", "err", err)
 	}
 }
 

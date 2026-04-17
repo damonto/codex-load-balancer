@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -128,7 +129,16 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 		usageCapture := newWebsocketUsageCapture(func(usage TokenUsage) {
 			s.recordTokenUsage(token, path, upstream.resp.StatusCode, true, usage)
 		})
-		clientToUpstream, upstreamToClient, tunnelErr := tunnelWebSocket(w, r, upstream, usageCapture)
+		tunnelCtx, cancelTunnel := context.WithCancel(context.Background())
+		stopRequestClose := context.AfterFunc(r.Context(), cancelTunnel)
+		stopShutdownClose := context.AfterFunc(s.shutdownContext(), cancelTunnel)
+		s.websocketWG.Add(1)
+		defer s.websocketWG.Done()
+		defer stopShutdownClose()
+		defer stopRequestClose()
+		defer cancelTunnel()
+
+		clientToUpstream, upstreamToClient, tunnelErr := tunnelWebSocket(tunnelCtx, w, upstream, usageCapture)
 		ctxErr := r.Context().Err()
 		if tunnelErr != nil {
 			slog.Warn(

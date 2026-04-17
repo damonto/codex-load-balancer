@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -63,9 +64,30 @@ func (p UsagePoint) TotalTokens() int64 {
 	return p.InputTokens + p.CachedTokens + p.OutputTokens
 }
 
+type AccountUsageTrends struct {
+	Daily   []UsagePoint `json:"daily"`
+	Weekly  []UsagePoint `json:"weekly"`
+	Monthly []UsagePoint `json:"monthly"`
+}
+
 type UsageDB struct {
 	db *sql.DB
 }
+
+const insertUsageSQL = `
+INSERT INTO usage_events (
+	account_key,
+	token_id,
+	request_path,
+	status_code,
+	is_stream,
+	input_tokens,
+	cached_tokens,
+	output_tokens,
+	reasoning_tokens,
+	created_at_unix
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
 
 func openUsageDB(path string) (*UsageDB, error) {
 	dsn := fmt.Sprintf("file:%s?mode=rwc&_journal_mode=WAL&_synchronous=NORMAL", path)
@@ -186,28 +208,60 @@ func (s *UsageDB) columnExists(ctx context.Context, tableName string, columnName
 }
 
 func (s *UsageDB) InsertUsage(ctx context.Context, rec UsageRecord) error {
+	if err := execInsertUsage(ctx, s.db, rec); err != nil {
+		return fmt.Errorf("insert usage event: %w", err)
+	}
+	return nil
+}
+
+func (s *UsageDB) InsertUsageBatch(ctx context.Context, records []UsageRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin usage batch: %w", err)
+	}
+
+	for _, rec := range records {
+		if err := execInsertUsage(ctx, tx, rec); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("insert usage batch: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit usage batch: %w", err)
+	}
+	return nil
+}
+
+type usageExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func execInsertUsage(ctx context.Context, execer usageExecer, rec UsageRecord) error {
 	createdAt := rec.CreatedAt
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
 	}
-	_, err := s.db.ExecContext(ctx, `
-INSERT INTO usage_events (
-	account_key,
-	token_id,
-	request_path,
-	status_code,
-	is_stream,
-	input_tokens,
-	cached_tokens,
-	output_tokens,
-	reasoning_tokens,
-	created_at_unix
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-`, rec.AccountKey, rec.TokenID, rec.Path, rec.StatusCode, boolToInt(rec.IsStream), rec.InputTokens, rec.CachedTokens, rec.OutputTokens, rec.ReasoningTokens, createdAt.Unix())
-	if err != nil {
-		return fmt.Errorf("insert usage event: %w", err)
-	}
-	return nil
+
+	_, err := execer.ExecContext(
+		ctx,
+		insertUsageSQL,
+		rec.AccountKey,
+		rec.TokenID,
+		rec.Path,
+		rec.StatusCode,
+		boolToInt(rec.IsStream),
+		rec.InputTokens,
+		rec.CachedTokens,
+		rec.OutputTokens,
+		rec.ReasoningTokens,
+		createdAt.Unix(),
+	)
+	return err
 }
 
 func (s *UsageDB) GlobalTotals(ctx context.Context) (UsageTotals, error) {
@@ -400,52 +454,117 @@ func (s *UsageDB) ListAccountSummaries(
 }
 
 func (s *UsageDB) AccountTrends(ctx context.Context, accountKey string) ([]UsagePoint, []UsagePoint, []UsagePoint, error) {
-	daily, err := s.queryTrend(ctx, accountKey, "%Y-%m-%d", 30)
+	trendsByAccount, err := s.AccountTrendsBatch(ctx, []string{accountKey})
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	weekly, err := s.queryTrend(ctx, accountKey, "%Y-W%W", 16)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	monthly, err := s.queryTrend(ctx, accountKey, "%Y-%m", 12)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return daily, weekly, monthly, nil
+
+	trends := trendsByAccount[accountKey]
+	return trends.Daily, trends.Weekly, trends.Monthly, nil
 }
 
-func (s *UsageDB) queryTrend(ctx context.Context, accountKey string, format string, limit int) ([]UsagePoint, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func (s *UsageDB) AccountTrendsBatch(ctx context.Context, accountKeys []string) (map[string]AccountUsageTrends, error) {
+	keys := slices.Clone(accountKeys)
+	slices.Sort(keys)
+	keys = slices.Compact(keys)
+
+	trendsByAccount := make(map[string]AccountUsageTrends, len(keys))
+	for _, accountKey := range keys {
+		trendsByAccount[accountKey] = AccountUsageTrends{
+			Daily:   []UsagePoint{},
+			Weekly:  []UsagePoint{},
+			Monthly: []UsagePoint{},
+		}
+	}
+	if len(keys) == 0 {
+		return trendsByAccount, nil
+	}
+
+	daily, err := s.queryTrendsByAccounts(ctx, keys, "%Y-%m-%d", 30)
+	if err != nil {
+		return nil, err
+	}
+	weekly, err := s.queryTrendsByAccounts(ctx, keys, "%Y-W%W", 16)
+	if err != nil {
+		return nil, err
+	}
+	monthly, err := s.queryTrendsByAccounts(ctx, keys, "%Y-%m", 12)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, accountKey := range keys {
+		trends := trendsByAccount[accountKey]
+		if points, ok := daily[accountKey]; ok {
+			trends.Daily = points
+		}
+		if points, ok := weekly[accountKey]; ok {
+			trends.Weekly = points
+		}
+		if points, ok := monthly[accountKey]; ok {
+			trends.Monthly = points
+		}
+		trendsByAccount[accountKey] = trends
+	}
+	return trendsByAccount, nil
+}
+
+func (s *UsageDB) queryTrendsByAccounts(
+	ctx context.Context,
+	accountKeys []string,
+	format string,
+	limit int,
+) (map[string][]UsagePoint, error) {
+	placeholders := make([]string, 0, len(accountKeys))
+	args := make([]any, 0, 1+len(accountKeys))
+	args = append(args, format)
+	for _, accountKey := range accountKeys {
+		placeholders = append(placeholders, "?")
+		args = append(args, accountKey)
+	}
+
+	query := fmt.Sprintf(`
 SELECT
+	account_key,
 	strftime(?, created_at_unix, 'unixepoch') AS bucket,
 	COALESCE(SUM(input_tokens), 0),
 	COALESCE(SUM(cached_tokens), 0),
 	COALESCE(SUM(output_tokens), 0)
 FROM usage_events
-WHERE account_key = ?
-GROUP BY bucket
-ORDER BY bucket DESC
-LIMIT ?
-	`, format, accountKey, limit)
+WHERE account_key IN (%s)
+GROUP BY account_key, bucket
+ORDER BY account_key ASC, bucket DESC
+	`, strings.Join(placeholders, ", "))
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query trend: %w", err)
+		return nil, fmt.Errorf("query trends by account: %w", err)
 	}
 	defer rows.Close()
 
-	points := make([]UsagePoint, 0, limit)
+	pointsByAccount := make(map[string][]UsagePoint, len(accountKeys))
+	counts := make(map[string]int, len(accountKeys))
 	for rows.Next() {
+		var accountKey string
 		var point UsagePoint
-		if err := rows.Scan(&point.Bucket, &point.InputTokens, &point.CachedTokens, &point.OutputTokens); err != nil {
+		if err := rows.Scan(&accountKey, &point.Bucket, &point.InputTokens, &point.CachedTokens, &point.OutputTokens); err != nil {
 			return nil, fmt.Errorf("scan trend point: %w", err)
 		}
-		points = append(points, point)
+		if counts[accountKey] >= limit {
+			continue
+		}
+		pointsByAccount[accountKey] = append(pointsByAccount[accountKey], point)
+		counts[accountKey]++
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate trend points: %w", err)
 	}
-	slices.Reverse(points)
-	return points, nil
+
+	for accountKey, points := range pointsByAccount {
+		slices.Reverse(points)
+		pointsByAccount[accountKey] = points
+	}
+	return pointsByAccount, nil
 }
 
 type AccountQuota struct {

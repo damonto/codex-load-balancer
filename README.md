@@ -74,7 +74,7 @@ Example:
 
 - Allowed paths: `/responses` and `/v1/responses` only.
 - `/v1/responses` is normalized to `/responses` upstream.
-- All request headers are preserved; only `Authorization` is replaced.
+- Most request headers are preserved; `Authorization` is replaced and `Accept-Encoding` is removed so the proxy can inspect upstream response bodies.
 - For WebSocket upstream requests, `Sec-WebSocket-Extensions` is stripped so usage frames stay observable as plain JSON (no per-message compression).
 - Upstream base URL: `https://chatgpt.com/backend-api/codex`.
 - WebSocket (`Upgrade: websocket`) requests are proxied through the selected token.
@@ -112,7 +112,8 @@ Endpoints:
 
 ```
 GET /stats
-GET /stats/overview?q=<search>
+GET /stats/overview
+GET /stats/accounts/details
 GET /stats/account?account_key=<account_id>
 ```
 
@@ -123,19 +124,10 @@ Auth:
 Dashboard data:
 
 - Overview cards: `today`, `recent_7_days`, `recent_30_days`, `total` with `input_tokens`, `cached_tokens`, `output_tokens`, `reasoning_tokens`.
+- Current dashboard page load uses only `/stats/overview`.
 - Account table: `email`, `plan_type`, totals, and 5-hour / weekly quota usage from usage sync (`/backend-api/wham/usage`).
-- Detail view: daily / weekly / monthly token trends.
-
-## Account Key Migration
-
-If old `usage_events.account_key` rows were written as `user_xx`, migrate them to `account_id` with:
-
-```bash
-./migrate_usage_account_keys.sh --db data/clb.db --data-dir data
-./migrate_usage_account_keys.sh --apply --db data/clb.db --data-dir data
-```
-
-The script reads only `.tokens.account_id` from credential JSON files. It does not parse JWTs.
+- Future detail view can use `/stats/accounts/details` for batched `daily` / `weekly` / `monthly` token trends.
+- `/stats/account` remains available for single-account drill-down.
 
 ## Logs
 

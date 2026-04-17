@@ -22,6 +22,7 @@ type appRuntime struct {
 	store     *TokenStore
 	usageDB   *UsageDB
 	usageSink *UsageSink
+	server    *Server
 }
 
 func main() {
@@ -52,7 +53,7 @@ func run(cfg appConfig) error {
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	rt.usageSink.Run(ctx)
+	rt.usageSink.Run()
 	defer closeRuntime(rt)
 	defer stop()
 
@@ -116,6 +117,11 @@ func bootstrapRuntime(cfg *appConfig) (*appRuntime, error) {
 }
 
 func closeRuntime(rt *appRuntime) {
+	if rt.server != nil {
+		rt.server.beginShutdown()
+		rt.server.waitWebSockets()
+	}
+	rt.usageSink.Stop()
 	rt.usageSink.Wait()
 	if err := rt.usageDB.Close(); err != nil {
 		slog.Warn("close usage db", "err", err)
@@ -136,22 +142,29 @@ func newHTTPServer(cfg appConfig, rt *appRuntime) (*http.Server, error) {
 		return nil, fmt.Errorf("parse upstream URL: %w", err)
 	}
 
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+
 	server := &Server{
-		store:       rt.store,
-		client:      newUpstreamClient(),
-		upstreamURL: upstreamURL,
-		apiKey:      cfg.apiKey,
-		usageDB:     rt.usageDB,
-		usageSink:   rt.usageSink,
+		store:          rt.store,
+		client:         newUpstreamClient(),
+		upstreamURL:    upstreamURL,
+		apiKey:         cfg.apiKey,
+		usageDB:        rt.usageDB,
+		usageSink:      rt.usageSink,
+		shutdownCtx:    shutdownCtx,
+		shutdownCancel: shutdownCancel,
 	}
+	rt.server = server
 
 	addr := fmt.Sprintf(":%d", cfg.port)
-	return &http.Server{
+	srv := &http.Server{
 		Addr:              addr,
 		Handler:           newMux(server),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       90 * time.Second,
-	}, nil
+	}
+	srv.RegisterOnShutdown(server.beginShutdown)
+	return srv, nil
 }
 
 func newUpstreamClient() *http.Client {
@@ -162,12 +175,23 @@ func newUpstreamClient() *http.Client {
 
 func newMux(server *Server) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/stats/assets/", handleDashboardAsset)
-	mux.HandleFunc("/stats", server.handleDashboard)
-	mux.HandleFunc("/stats/overview", server.handleDashboardOverview)
-	mux.HandleFunc("/stats/account", server.handleDashboardAccount)
+	mux.HandleFunc("/stats/assets/", handleMethodNotAllowed)
+	mux.HandleFunc("/stats", handleMethodNotAllowed)
+	mux.HandleFunc("/stats/overview", handleMethodNotAllowed)
+	mux.HandleFunc("/stats/accounts/details", handleMethodNotAllowed)
+	mux.HandleFunc("/stats/account", handleMethodNotAllowed)
+	mux.HandleFunc("GET /stats/assets/", handleDashboardAsset)
+	mux.HandleFunc("GET /stats", server.handleDashboard)
+	mux.HandleFunc("GET /stats/overview", server.handleDashboardOverview)
+	mux.HandleFunc("GET /stats/accounts/details", server.handleDashboardAccountsDetails)
+	mux.HandleFunc("GET /stats/account", server.handleDashboardAccount)
 	mux.HandleFunc("/", server.handleProxy)
 	return mux
+}
+
+func handleMethodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Allow", "GET, HEAD")
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
 func serve(ctx context.Context, srv *http.Server) error {

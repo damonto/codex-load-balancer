@@ -96,8 +96,10 @@ func TestHandleWebSocketPreservesUpstreamFailureWhenNoAlternateToken(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var gotAuth string
+			var gotAcceptEncoding string
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				gotAuth = r.Header.Get("Authorization")
+				gotAcceptEncoding = r.Header.Get("Accept-Encoding")
 				w.WriteHeader(tt.upstreamStatus)
 				_, _ = w.Write([]byte(tt.upstreamBody))
 			}))
@@ -128,6 +130,7 @@ func TestHandleWebSocketPreservesUpstreamFailureWhenNoAlternateToken(t *testing.
 			req.Header.Set("Upgrade", "websocket")
 			req.Header.Set("Sec-WebSocket-Version", "13")
 			req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+			req.Header.Set("Accept-Encoding", "gzip")
 			rr := httptest.NewRecorder()
 
 			server.handleProxy(rr, req)
@@ -140,6 +143,9 @@ func TestHandleWebSocketPreservesUpstreamFailureWhenNoAlternateToken(t *testing.
 			}
 			if gotAuth != "Bearer upstream-token" {
 				t.Fatalf("Authorization = %q, want %q", gotAuth, "Bearer upstream-token")
+			}
+			if gotAcceptEncoding != "" {
+				t.Fatalf("Accept-Encoding = %q, want empty", gotAcceptEncoding)
 			}
 		})
 	}

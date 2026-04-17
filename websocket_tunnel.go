@@ -10,7 +10,7 @@ import (
 	"syscall"
 )
 
-func tunnelWebSocket(w http.ResponseWriter, r *http.Request, upstream *websocketUpstreamResponse, observer io.Writer) (int64, int64, error) {
+func tunnelWebSocket(ctx context.Context, w http.ResponseWriter, upstream *websocketUpstreamResponse, observer io.Writer) (int64, int64, error) {
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		upstream.conn.Close()
@@ -51,7 +51,7 @@ func tunnelWebSocket(w http.ResponseWriter, r *http.Request, upstream *websocket
 		resultCh <- copyResult{clientToUpstream: false, n: n, err: err}
 	}()
 
-	stopCancelClose := context.AfterFunc(r.Context(), func() {
+	stopCancelClose := context.AfterFunc(ctx, func() {
 		_ = clientConn.Close()
 		_ = upstream.conn.Close()
 	})

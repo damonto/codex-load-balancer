@@ -36,6 +36,8 @@ func (s *Server) forwardRequestWithTarget(r *http.Request, body []byte, target u
 
 	req.Header = cloneForwardHeaders(r.Header)
 	req.Header.Set("Authorization", authHeaderValue(authToken))
+	// Let net/http negotiate gzip itself so non-stream responses stay inspectable.
+	req.Header.Del("Accept-Encoding")
 	if accountID != "" && req.Header.Get("ChatGPT-Account-ID") == "" {
 		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
@@ -77,6 +79,7 @@ func (s *Server) forwardWebSocketRequestWithTarget(r *http.Request, target url.U
 	req.Host = target.Host
 	req.Header = cloneHeaders(r.Header)
 	req.Header.Del("Sec-WebSocket-Extensions")
+	req.Header.Del("Accept-Encoding")
 	req.Body = nil
 	req.ContentLength = 0
 	req.TransferEncoding = nil
