@@ -8,6 +8,9 @@ import (
 )
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path string, sessionID string) {
+	s.websocketWG.Add(1)
+	defer s.websocketWG.Done()
+
 	prevTokenID := ""
 	if sessionID != "" {
 		if tokenID, ok := s.store.SessionToken(sessionID); ok {
@@ -22,7 +25,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 		token, sticky, err := s.store.SelectToken(sessionID, tried)
 		if err != nil {
 			if retryResp != nil {
-				writeResponse(w, retryResp, retryBody)
+				if err := writeResponse(w, retryResp, retryBody); err != nil {
+					slog.Warn("write websocket retry response", "session", sessionID, "err", err)
+				}
 				return
 			}
 			http.Error(w, "no available tokens", http.StatusServiceUnavailable)
@@ -81,7 +86,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 				s.store.ClearSession(sessionID)
 			}
 			if attempt == 1 || !s.store.HasAvailableToken(tried) {
-				writeResponse(w, upstream.resp, upstream.body)
+				if err := writeResponse(w, upstream.resp, upstream.body); err != nil {
+					slog.Warn("write websocket unauthorized response", "token", token.ID, "session", sessionID, "err", err)
+				}
 				return
 			}
 			retryResp = upstream.resp
@@ -104,7 +111,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 				s.store.ClearSession(sessionID)
 			}
 			if attempt == 1 || !s.store.HasAvailableToken(tried) {
-				writeResponse(w, upstream.resp, upstream.body)
+				if err := writeResponse(w, upstream.resp, upstream.body); err != nil {
+					slog.Warn("write websocket limit response", "token", token.ID, "session", sessionID, "err", err)
+				}
 				return
 			}
 			retryResp = upstream.resp
@@ -113,7 +122,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 		}
 
 		if upstream.resp.StatusCode != http.StatusSwitchingProtocols {
-			writeResponse(w, upstream.resp, upstream.body)
+			if err := writeResponse(w, upstream.resp, upstream.body); err != nil {
+				slog.Warn("write websocket upstream response", "token", token.ID, "session", sessionID, "err", err)
+			}
 			return
 		}
 
@@ -131,9 +142,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 		})
 		tunnelCtx, cancelTunnel := context.WithCancel(context.Background())
 		stopRequestClose := context.AfterFunc(r.Context(), cancelTunnel)
-		stopShutdownClose := context.AfterFunc(s.shutdownContext(), cancelTunnel)
-		s.websocketWG.Add(1)
-		defer s.websocketWG.Done()
+		stopShutdownClose := afterSignal(s.shutdownSignal(), cancelTunnel)
 		defer stopShutdownClose()
 		defer stopRequestClose()
 		defer cancelTunnel()
@@ -154,4 +163,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 		}
 		return
 	}
+}
+
+func afterSignal(done <-chan struct{}, f func()) func() {
+	if done == nil {
+		return func() {}
+	}
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-done:
+			f()
+		case <-stop:
+		}
+	}()
+	return func() { close(stop) }
 }

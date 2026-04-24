@@ -13,13 +13,13 @@ import (
 func tunnelWebSocket(ctx context.Context, w http.ResponseWriter, upstream *websocketUpstreamResponse, observer io.Writer) (int64, int64, error) {
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
-		upstream.conn.Close()
+		_ = upstream.conn.Close()
 		return 0, 0, fmt.Errorf("hijack response writer: unsupported")
 	}
 
 	clientConn, clientRW, err := hijacker.Hijack()
 	if err != nil {
-		upstream.conn.Close()
+		_ = upstream.conn.Close()
 		return 0, 0, fmt.Errorf("hijack client connection: %w", err)
 	}
 	defer clientConn.Close()

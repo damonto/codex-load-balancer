@@ -57,7 +57,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		token, sticky, err := s.store.SelectToken(sessionID, tried)
 		if err != nil {
 			if retryResp != nil {
-				writeResponse(w, retryResp, retryBody)
+				if err := writeResponse(w, retryResp, retryBody); err != nil {
+					slog.Warn("write retry response", "session", sessionID, "err", err)
+				}
 				return
 			}
 			http.Error(w, "no available tokens", http.StatusServiceUnavailable)
@@ -115,7 +117,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				s.store.ClearSession(sessionID)
 			}
 			if attempt == 1 || !s.store.HasAvailableToken(tried) {
-				writeResponse(w, resp, respBody)
+				if err := writeResponse(w, resp, respBody); err != nil {
+					slog.Warn("write unauthorized response", "token", token.ID, "session", sessionID, "err", err)
+				}
 				return
 			}
 			retryResp = resp
@@ -137,7 +141,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				s.store.ClearSession(sessionID)
 			}
 			if attempt == 1 || !s.store.HasAvailableToken(tried) {
-				writeResponse(w, resp, respBody)
+				if err := writeResponse(w, resp, respBody); err != nil {
+					slog.Warn("write limit response", "token", token.ID, "session", sessionID, "err", err)
+				}
 				return
 			}
 			retryResp = resp
@@ -167,7 +173,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		writeResponse(w, resp, respBody)
+		if err := writeResponse(w, resp, respBody); err != nil {
+			slog.Warn("write upstream response", "token", token.ID, "session", sessionID, "err", err)
+		}
 		return
 	}
 }

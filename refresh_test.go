@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -85,7 +86,9 @@ func TestMaybeRefreshTokenDebounceAfterConcurrentRefresh(t *testing.T) {
 				resultCh <- refreshResult{refreshed: refreshed, err: err}
 			}()
 
-			time.Sleep(10 * time.Millisecond)
+			for range 100 {
+				runtime.Gosched()
+			}
 			store.UpdateCredentials("active.json", "new-access-token", "refresh-token")
 			lock.Unlock()
 

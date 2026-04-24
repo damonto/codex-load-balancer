@@ -39,19 +39,12 @@ func TestParseAppConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "supports aliases",
+			name: "rejects removed aliases",
 			args: []string{
 				"--api-key", "secret",
 				"--data-key", filepath.Join(string(os.PathSeparator), "tmp", "tokens"),
-				"--server-port", "8088",
 			},
-			want: appConfig{
-				apiKey:          "secret",
-				dataDir:         filepath.Join(string(os.PathSeparator), "tmp", "tokens"),
-				port:            8088,
-				syncInterval:    defaultUsageSyncInterval,
-				syncConcurrency: defaultUsageSyncConcurrency,
-			},
+			wantErrText: "flag provided but not defined: -data-key",
 		},
 		{
 			name:        "rejects unexpected args",

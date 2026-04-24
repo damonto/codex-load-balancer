@@ -32,10 +32,13 @@ func cloneForwardHeaders(in http.Header) http.Header {
 	return out
 }
 
-func writeResponse(w http.ResponseWriter, resp *http.Response, body []byte) {
+func writeResponse(w http.ResponseWriter, resp *http.Response, body []byte) error {
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(body)
+	if _, err := w.Write(body); err != nil {
+		return fmt.Errorf("write response body: %w", err)
+	}
+	return nil
 }
 
 func streamResponseWithObserver(w http.ResponseWriter, resp *http.Response, observer io.Writer) (int64, error) {

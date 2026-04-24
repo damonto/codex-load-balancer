@@ -1,0 +1,11 @@
+services:
+  codex-load-balancer:
+    build:
+      context: .
+    image: codex-load-balancer:local
+    restart: unless-stopped
+    ports:
+      - "${CLB_PORT:-8080}:8080"
+    volumes:
+      - ./data:/app/data
+    command: --api-key ${CODEX_API_KEY} --data-dir /app/data --port 8080 --sync-interval 5m --sync-concurrency 8

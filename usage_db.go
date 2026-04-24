@@ -223,10 +223,15 @@ func (s *UsageDB) InsertUsageBatch(ctx context.Context, records []UsageRecord) e
 	if err != nil {
 		return fmt.Errorf("begin usage batch: %w", err)
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 
 	for _, rec := range records {
 		if err := execInsertUsage(ctx, tx, rec); err != nil {
-			tx.Rollback()
 			return fmt.Errorf("insert usage batch: %w", err)
 		}
 	}
@@ -234,6 +239,7 @@ func (s *UsageDB) InsertUsageBatch(ctx context.Context, records []UsageRecord) e
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit usage batch: %w", err)
 	}
+	committed = true
 	return nil
 }
 

@@ -53,7 +53,9 @@ func (s *Server) forwardRequestWithTarget(r *http.Request, body []byte, target u
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	if closeErr := resp.Body.Close(); closeErr != nil && err == nil {
+		return nil, nil, false, fmt.Errorf("close upstream response: %w", closeErr)
+	}
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("read upstream response: %w", err)
 	}
@@ -89,22 +91,25 @@ func (s *Server) forwardWebSocketRequestWithTarget(r *http.Request, target url.U
 	}
 
 	if err := req.Write(conn); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("write upstream websocket request: %w", err)
 	}
 
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, req)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("read upstream websocket response: %w", err)
 	}
 
 	upstream := &websocketUpstreamResponse{resp: resp}
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		conn.Close()
+		if closeErr := resp.Body.Close(); closeErr != nil && err == nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("close upstream websocket response body: %w", closeErr)
+		}
+		_ = conn.Close()
 		if err != nil {
 			return nil, fmt.Errorf("read upstream websocket response body: %w", err)
 		}

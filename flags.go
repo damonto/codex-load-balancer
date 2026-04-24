@@ -41,9 +41,7 @@ func parseAppConfig(args []string, output io.Writer) (appConfig, error) {
 	}
 	fs.StringVar(&cfg.apiKey, "api-key", "", "API key for protected proxy endpoints")
 	fs.StringVar(&cfg.dataDir, "data-dir", "", "directory containing active *.json auth files")
-	fs.StringVar(&cfg.dataDir, "data-key", "", "alias for --data-dir")
 	fs.IntVar(&cfg.port, "port", defaultPort, "listen port")
-	fs.IntVar(&cfg.port, "server-port", defaultPort, "alias for --port")
 	fs.DurationVar(&cfg.syncInterval, "sync-interval", defaultUsageSyncInterval, "usage sync interval")
 	fs.IntVar(&cfg.syncConcurrency, "sync-concurrency", defaultUsageSyncConcurrency, "usage sync worker count")
 

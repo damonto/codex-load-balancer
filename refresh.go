@@ -48,6 +48,9 @@ type refreshTokenError struct {
 }
 
 func (e refreshTokenError) Error() string {
+	if e.err == nil {
+		return "refresh token"
+	}
 	return e.err.Error()
 }
 
@@ -218,21 +221,42 @@ func updateAuthFileTokens(path string, accessToken string, refreshToken string) 
 		return fmt.Errorf("read auth file: %w", err)
 	}
 
-	var payload map[string]any
+	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return fmt.Errorf("decode auth file: %w", err)
 	}
 
-	tokens, ok := payload["tokens"].(map[string]any)
-	if !ok {
-		tokens = make(map[string]any)
-		payload["tokens"] = tokens
+	tokens := make(map[string]json.RawMessage)
+	if rawTokens, ok := payload["tokens"]; ok && len(rawTokens) > 0 {
+		if err := json.Unmarshal(rawTokens, &tokens); err != nil {
+			return fmt.Errorf("decode auth file tokens: %w", err)
+		}
 	}
-	tokens["access_token"] = accessToken
+	if tokens == nil {
+		tokens = make(map[string]json.RawMessage)
+	}
+	accessTokenJSON, err := json.Marshal(accessToken)
+	if err != nil {
+		return fmt.Errorf("encode access token: %w", err)
+	}
+	tokens["access_token"] = accessTokenJSON
 	if refreshToken != "" {
-		tokens["refresh_token"] = refreshToken
+		refreshTokenJSON, err := json.Marshal(refreshToken)
+		if err != nil {
+			return fmt.Errorf("encode refresh token: %w", err)
+		}
+		tokens["refresh_token"] = refreshTokenJSON
 	}
-	payload["last_refresh"] = time.Now().UTC().Format(time.RFC3339Nano)
+	tokensJSON, err := json.Marshal(tokens)
+	if err != nil {
+		return fmt.Errorf("encode auth file tokens: %w", err)
+	}
+	payload["tokens"] = tokensJSON
+	lastRefreshJSON, err := json.Marshal(time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("encode last refresh: %w", err)
+	}
+	payload["last_refresh"] = lastRefreshJSON
 
 	updated, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {

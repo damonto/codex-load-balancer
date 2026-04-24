@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -19,10 +20,12 @@ const usageSinkBufferSize = 2048
 var BuildVersion string
 
 type appRuntime struct {
-	store     *TokenStore
-	usageDB   *UsageDB
-	usageSink *UsageSink
-	server    *Server
+	store       *TokenStore
+	usageDB     *UsageDB
+	usageSink   *UsageSink
+	server      *Server
+	stopWorkers context.CancelFunc
+	workerWG    sync.WaitGroup
 }
 
 func main() {
@@ -57,7 +60,7 @@ func run(cfg appConfig) error {
 	defer closeRuntime(rt)
 	defer stop()
 
-	startBackgroundWorkers(ctx, cfg, rt.store)
+	startBackgroundWorkers(ctx, cfg, rt)
 
 	srv, err := newHTTPServer(cfg, rt)
 	if err != nil {
@@ -117,6 +120,10 @@ func bootstrapRuntime(cfg *appConfig) (*appRuntime, error) {
 }
 
 func closeRuntime(rt *appRuntime) {
+	if rt.stopWorkers != nil {
+		rt.stopWorkers()
+	}
+	rt.workerWG.Wait()
 	if rt.server != nil {
 		rt.server.beginShutdown()
 		rt.server.waitWebSockets()
@@ -128,11 +135,17 @@ func closeRuntime(rt *appRuntime) {
 	}
 }
 
-func startBackgroundWorkers(ctx context.Context, cfg appConfig, store *TokenStore) {
-	go runTokenWatcher(ctx, store, cfg.dataDir)
-	go runUsageSyncer(ctx, store, usageEndpointURL, usageSyncOptions{
-		Interval:    cfg.syncInterval,
-		Concurrency: cfg.syncConcurrency,
+func startBackgroundWorkers(ctx context.Context, cfg appConfig, rt *appRuntime) {
+	workerCtx, cancel := context.WithCancel(ctx)
+	rt.stopWorkers = cancel
+	rt.workerWG.Go(func() {
+		runTokenWatcher(workerCtx, rt.store, cfg.dataDir)
+	})
+	rt.workerWG.Go(func() {
+		runUsageSyncer(workerCtx, rt.store, usageEndpointURL, usageSyncOptions{
+			Interval:    cfg.syncInterval,
+			Concurrency: cfg.syncConcurrency,
+		})
 	})
 }
 
@@ -142,17 +155,14 @@ func newHTTPServer(cfg appConfig, rt *appRuntime) (*http.Server, error) {
 		return nil, fmt.Errorf("parse upstream URL: %w", err)
 	}
 
-	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
-
 	server := &Server{
-		store:          rt.store,
-		client:         newUpstreamClient(),
-		upstreamURL:    upstreamURL,
-		apiKey:         cfg.apiKey,
-		usageDB:        rt.usageDB,
-		usageSink:      rt.usageSink,
-		shutdownCtx:    shutdownCtx,
-		shutdownCancel: shutdownCancel,
+		store:        rt.store,
+		client:       newUpstreamClient(),
+		upstreamURL:  upstreamURL,
+		apiKey:       cfg.apiKey,
+		usageDB:      rt.usageDB,
+		usageSink:    rt.usageSink,
+		shutdownDone: make(chan struct{}),
 	}
 	rt.server = server
 

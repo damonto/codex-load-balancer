@@ -39,11 +39,23 @@ Flags:
 
 - `--api-key` (required): API key for protected proxy endpoints.
 - `--data-dir` (required): Directory containing active `*.json` auth files.
-- `--data-key` (optional): Alias for `--data-dir`.
 - `--port` (optional): Listen port. Default `8080`.
-- `--server-port` (optional): Alias for `--port`.
 - `--sync-interval` (optional): Usage sync interval. Default `5m`.
 - `--sync-concurrency` (optional): Usage sync concurrency. Default `8`.
+
+## Docker Compose
+
+Put credential `*.json` files in `./data`, then start the service:
+
+```bash
+CODEX_API_KEY=your-api-key docker compose up -d --build
+```
+
+By default, Compose publishes `8080:8080`. Override the host port when needed:
+
+```bash
+CODEX_API_KEY=your-api-key CLB_PORT=9090 docker compose up -d --build
+```
 
 Notes:
 

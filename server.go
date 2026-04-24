@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"net/http"
 	"net/url"
 	"sync"
@@ -21,16 +20,18 @@ type Server struct {
 	usageDB     *UsageDB
 	usageSink   *UsageSink
 
-	shutdownCtx    context.Context
-	shutdownCancel context.CancelFunc
-	websocketWG    sync.WaitGroup
+	shutdownOnce sync.Once
+	shutdownDone chan struct{}
+	websocketWG  sync.WaitGroup
 }
 
 func (s *Server) beginShutdown() {
-	if s == nil || s.shutdownCancel == nil {
+	if s == nil || s.shutdownDone == nil {
 		return
 	}
-	s.shutdownCancel()
+	s.shutdownOnce.Do(func() {
+		close(s.shutdownDone)
+	})
 }
 
 func (s *Server) waitWebSockets() {
@@ -40,9 +41,9 @@ func (s *Server) waitWebSockets() {
 	s.websocketWG.Wait()
 }
 
-func (s *Server) shutdownContext() context.Context {
-	if s == nil || s.shutdownCtx == nil {
-		return context.Background()
+func (s *Server) shutdownSignal() <-chan struct{} {
+	if s == nil || s.shutdownDone == nil {
+		return nil
 	}
-	return s.shutdownCtx
+	return s.shutdownDone
 }
