@@ -72,8 +72,8 @@ Example:
 
 ## Proxy Behavior
 
-- Allowed paths: `/responses` and `/v1/responses` only.
-- `/v1/responses` is normalized to `/responses` upstream.
+- Allowed paths: `/responses`, `/v1/responses`, `/models`, and `/v1/models` only.
+- `/v1/responses` and `/v1/models` are normalized by stripping `/v1` upstream.
 - Most request headers are preserved; `Authorization` is replaced and `Accept-Encoding` is removed so the proxy can inspect upstream response bodies.
 - For WebSocket upstream requests, `Sec-WebSocket-Extensions` is stripped so usage frames stay observable as plain JSON (no per-message compression).
 - Upstream base URL: `https://chatgpt.com/backend-api/codex`.

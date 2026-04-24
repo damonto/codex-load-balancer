@@ -7,11 +7,14 @@ import (
 )
 
 func allowedPath(path string) bool {
-	return hasResponsesPathPrefix(path, "/responses") || hasResponsesPathPrefix(path, "/v1/responses")
+	return hasAPIPathPrefix(path, "/responses") ||
+		hasAPIPathPrefix(path, "/v1/responses") ||
+		hasAPIPathPrefix(path, "/models") ||
+		hasAPIPathPrefix(path, "/v1/models")
 }
 
-func normalizeResponsesPath(path string) string {
-	if strings.HasPrefix(path, "/v1/responses") {
+func normalizeAPIPath(path string) string {
+	if strings.HasPrefix(path, "/v1/responses") || strings.HasPrefix(path, "/v1/models") {
 		return strings.TrimPrefix(path, "/v1")
 	}
 	return path
@@ -55,6 +58,6 @@ func joinURLPath(basePath, reqPath string) string {
 	return base + reqPath
 }
 
-func hasResponsesPathPrefix(path, prefix string) bool {
+func hasAPIPathPrefix(path, prefix string) bool {
 	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }

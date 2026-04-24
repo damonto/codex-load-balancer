@@ -21,7 +21,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := extractSessionID(r.Header)
 
-	forwardPath := normalizeResponsesPath(r.URL.Path)
+	forwardPath := normalizeAPIPath(r.URL.Path)
 	if isWebSocketRequest(r) {
 		if sessionID == "" {
 			slog.Warn("websocket request missing session_id; reconnect may lose token stickiness")
