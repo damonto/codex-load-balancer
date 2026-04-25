@@ -1,11 +1,14 @@
 services:
   codex-load-balancer:
-    build:
-      context: .
-    image: codex-load-balancer:local
+    image: damonto/codex-load-balancer:latest
     restart: unless-stopped
     ports:
-      - "${CLB_PORT:-8080}:8080"
+      - "${CLB_PORT:-8080}:${CLB_LISTEN_PORT:-8080}"
     volumes:
-      - ./data:/app/data
-    command: --api-key ${CODEX_API_KEY} --data-dir /app/data --port 8080 --sync-interval 5m --sync-concurrency 8
+      - ./data:${CLB_DATA_DIR:-/app/data}
+    environment:
+      CLB_API_KEY: ${CLB_API_KEY:?CLB_API_KEY is required}
+      CLB_DATA_DIR: ${CLB_DATA_DIR:-/app/data}
+      CLB_LISTEN_PORT: ${CLB_LISTEN_PORT:-8080}
+      CLB_SYNC_INTERVAL: ${CLB_SYNC_INTERVAL:-5m}
+      CLB_SYNC_CONCURRENCY: ${CLB_SYNC_CONCURRENCY:-8}

@@ -48,14 +48,23 @@ Flags:
 Put credential `*.json` files in `./data`, then start the service:
 
 ```bash
-CODEX_API_KEY=your-api-key docker compose up -d --build
+CLB_API_KEY=your-api-key docker compose up -d --build
 ```
 
 By default, Compose publishes `8080:8080`. Override the host port when needed:
 
 ```bash
-CODEX_API_KEY=your-api-key CLB_PORT=9090 docker compose up -d --build
+CLB_API_KEY=your-api-key CLB_PORT=9090 docker compose up -d --build
 ```
+
+Compose passes runtime settings through environment variables:
+
+- `CLB_API_KEY` (required): API key for protected proxy endpoints.
+- `CLB_PORT` (optional): Host port to publish. Default `8080`.
+- `CLB_LISTEN_PORT` (optional): Container listen port. Default `8080`.
+- `CLB_DATA_DIR` (optional): Container data directory. Default `/app/data`.
+- `CLB_SYNC_INTERVAL` (optional): Usage sync interval. Default `5m`.
+- `CLB_SYNC_CONCURRENCY` (optional): Usage sync concurrency. Default `8`.
 
 Notes:
 
