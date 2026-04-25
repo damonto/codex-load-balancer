@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -302,6 +303,58 @@ func TestSyncUsageOnceKeepsFreePlan(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("token file should remain, stat err = %v", err)
+	}
+}
+
+func TestSyncUsageNowRunsOnce(t *testing.T) {
+	tests := []struct {
+		name         string
+		usagePlan    string
+		wantRequests int32
+	}{
+		{
+			name:         "syncs loaded token before serving",
+			usagePlan:    "plus",
+			wantRequests: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewTokenStore()
+			store.UpsertToken(TokenState{
+				ID:        "active.json",
+				Token:     "access-token",
+				AccountID: "account-1",
+			}, time.Now().UTC())
+
+			var requests atomic.Int32
+			ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(rateLimitStatusPayload{
+					PlanType: tt.usagePlan,
+					RateLimit: &rateLimitStatusDetails{
+						PrimaryWindow: &rateLimitWindowSnapshot{UsedPercent: 1, LimitWindowSeconds: 18000},
+					},
+				}); err != nil {
+					t.Fatalf("encode response: %v", err)
+				}
+			}))
+
+			syncUsageNow(context.Background(), store, ts.URL, usageSyncOptions{Concurrency: 1})
+
+			if got := requests.Load(); got != tt.wantRequests {
+				t.Fatalf("requests = %d, want %d", got, tt.wantRequests)
+			}
+			token, ok := store.TokenSnapshot("active.json")
+			if !ok {
+				t.Fatal("token should remain in store")
+			}
+			if token.PlanType != tt.usagePlan {
+				t.Fatalf("PlanType = %q, want %q", token.PlanType, tt.usagePlan)
+			}
+		})
 	}
 }
 

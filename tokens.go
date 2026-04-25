@@ -26,9 +26,14 @@ type tokenFields struct {
 }
 
 func loadTokensFromDir(store *TokenStore, dir string) error {
+	_, err := loadTokensFromDirChanged(store, dir)
+	return err
+}
+
+func loadTokensFromDirChanged(store *TokenStore, dir string) (bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("read token dir: %w", err)
+		return false, fmt.Errorf("read token dir: %w", err)
 	}
 
 	existing := make(map[string]struct{}, len(entries))
@@ -82,7 +87,7 @@ func loadTokensFromDir(store *TokenStore, dir string) error {
 	if len(removed) > 0 {
 		slog.Info("tokens pruned", "removed", len(removed))
 	}
-	return nil
+	return added > 0 || updated > 0, nil
 }
 
 func parseAuthFile(path string) (token, accountID, refreshToken string, lastRefresh time.Time, err error) {
@@ -117,7 +122,18 @@ func parseLastRefresh(raw *string) time.Time {
 	return time.Time{}
 }
 
-func runTokenWatcher(ctx context.Context, store *TokenStore, dir string) {
+func reloadTokensAndSyncUsage(ctx context.Context, store *TokenStore, dir string, usageURL string, syncOpts usageSyncOptions) error {
+	changed, err := loadTokensFromDirChanged(store, dir)
+	if err != nil {
+		return err
+	}
+	if changed {
+		syncUsageNow(ctx, store, usageURL, syncOpts)
+	}
+	return nil
+}
+
+func runTokenWatcher(ctx context.Context, store *TokenStore, dir string, usageURL string, syncOpts usageSyncOptions) {
 	ticker := time.NewTicker(defaultTokenWatchInterval)
 	defer ticker.Stop()
 
@@ -126,7 +142,7 @@ func runTokenWatcher(ctx context.Context, store *TokenStore, dir string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := loadTokensFromDir(store, dir); err != nil {
+			if err := reloadTokensAndSyncUsage(ctx, store, dir, usageURL, syncOpts); err != nil {
 				slog.Warn("token scan", "err", err)
 			}
 		}

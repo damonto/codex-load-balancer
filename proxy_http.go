@@ -49,7 +49,6 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-
 	tried := make(map[string]bool)
 	var retryResp *http.Response
 	var retryBody []byte
@@ -81,7 +80,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		resp, respBody, stream, err := s.forwardRequest(r, body, token, forwardPath)
+		bodyForToken := responseBodyForToken(forwardPath, body, token, sessionID)
+		resp, respBody, stream, err := s.forwardRequest(r, bodyForToken, token, forwardPath)
 		if err != nil {
 			slog.Warn("upstream request", "token", token.ID, "session", sessionID, "err", err)
 			http.Error(w, "upstream error", http.StatusBadGateway)
@@ -102,7 +102,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 				if updated, ok := s.store.TokenSnapshot(token.ID); ok {
 					token = updated
 				}
-				resp, respBody, stream, err = s.forwardRequest(r, body, token, forwardPath)
+				bodyForToken = responseBodyForToken(forwardPath, body, token, sessionID)
+				resp, respBody, stream, err = s.forwardRequest(r, bodyForToken, token, forwardPath)
 				if err != nil {
 					slog.Warn("upstream request", "token", token.ID, "session", sessionID, "err", err)
 					http.Error(w, "upstream error", http.StatusBadGateway)
@@ -178,6 +179,21 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+}
+
+func responseBodyForToken(path string, body []byte, token TokenState, sessionID string) []byte {
+	if !shouldInjectResponseTools(path) {
+		return body
+	}
+	updated, changed, err := injectResponseTools(body, responseToolInjectionContextForToken(token))
+	if err != nil {
+		slog.Warn("inject response tools", "session", sessionID, "token", token.ID, "err", err)
+		return body
+	}
+	if !changed {
+		return body
+	}
+	return updated
 }
 
 func (s *Server) applyUsageFromHeaders(tokenID string, headers http.Header) {

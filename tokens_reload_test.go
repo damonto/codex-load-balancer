@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -71,6 +74,123 @@ func TestLoadTokensFromDirPrunesMissingFiles(t *testing.T) {
 				if _, ok := store.SessionToken("session-" + name); ok {
 					t.Fatalf("session for removed token %q should be cleared", name)
 				}
+			}
+		})
+	}
+}
+
+func TestLoadTokensFromDirIgnoresSessionMetadata(t *testing.T) {
+	tests := []struct {
+		name     string
+		email    string
+		planType string
+	}{
+		{
+			name:     "session metadata present",
+			email:    "demo@example.com",
+			planType: "free",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewTokenStore()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "active.json")
+			if err := writeSessionFileForTest(path, "token-active", "account-1", tt.email, tt.planType); err != nil {
+				t.Fatalf("write session file: %v", err)
+			}
+
+			if err := loadTokensFromDir(store, dir); err != nil {
+				t.Fatalf("loadTokensFromDir() error = %v", err)
+			}
+
+			token, ok := store.TokenSnapshot("active.json")
+			if !ok {
+				t.Fatal("token should be loaded")
+			}
+			if token.Email != "" {
+				t.Fatalf("Email = %q, want empty", token.Email)
+			}
+			if token.PlanType != "" {
+				t.Fatalf("PlanType = %q, want empty", token.PlanType)
+			}
+		})
+	}
+}
+
+func TestReloadTokensAndSyncUsageSyncsAddedOrUpdatedTokens(t *testing.T) {
+	tests := []struct {
+		name      string
+		seedToken string
+		nextToken string
+	}{
+		{
+			name:      "added token",
+			nextToken: "new-access",
+		},
+		{
+			name:      "updated token",
+			seedToken: "old-access",
+			nextToken: "new-access",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewTokenStore()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "active.json")
+
+			if tt.seedToken != "" {
+				if err := writeSessionFileForTest(path, tt.seedToken, "account-1", "", ""); err != nil {
+					t.Fatalf("write seed session file: %v", err)
+				}
+				if err := loadTokensFromDir(store, dir); err != nil {
+					t.Fatalf("loadTokensFromDir() seed error = %v", err)
+				}
+			}
+			if err := writeSessionFileForTest(path, tt.nextToken, "account-1", "", ""); err != nil {
+				t.Fatalf("write next session file: %v", err)
+			}
+			nextModTime := time.Now().UTC().Add(2 * time.Second)
+			if err := os.Chtimes(path, nextModTime, nextModTime); err != nil {
+				t.Fatalf("Chtimes() error = %v", err)
+			}
+
+			var requests atomic.Int32
+			ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if got := r.Header.Get("Authorization"); got != "Bearer "+tt.nextToken {
+					t.Fatalf("Authorization = %q, want %q", got, "Bearer "+tt.nextToken)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(rateLimitStatusPayload{
+					PlanType: "free",
+					RateLimit: &rateLimitStatusDetails{
+						PrimaryWindow: &rateLimitWindowSnapshot{UsedPercent: 1, LimitWindowSeconds: 18000},
+					},
+				}); err != nil {
+					t.Fatalf("encode response: %v", err)
+				}
+			}))
+
+			if err := reloadTokensAndSyncUsage(context.Background(), store, dir, ts.URL, usageSyncOptions{Concurrency: 1}); err != nil {
+				t.Fatalf("reloadTokensAndSyncUsage() error = %v", err)
+			}
+
+			if got := requests.Load(); got != 1 {
+				t.Fatalf("requests = %d, want 1", got)
+			}
+			token, ok := store.TokenSnapshot("active.json")
+			if !ok {
+				t.Fatal("token should be loaded")
+			}
+			if token.Token != tt.nextToken {
+				t.Fatalf("Token = %q, want %q", token.Token, tt.nextToken)
+			}
+			if token.PlanType != "free" {
+				t.Fatalf("PlanType = %q, want %q", token.PlanType, "free")
 			}
 		})
 	}

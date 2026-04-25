@@ -147,7 +147,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 		defer stopRequestClose()
 		defer cancelTunnel()
 
-		clientToUpstream, upstreamToClient, tunnelErr := tunnelWebSocket(tunnelCtx, w, upstream, usageCapture)
+		clientToUpstream, upstreamToClient, tunnelErr := tunnelWebSocket(
+			tunnelCtx,
+			w,
+			upstream,
+			usageCapture,
+			shouldInjectResponseTools(path),
+			responseToolInjectionContextForToken(token),
+		)
 		ctxErr := r.Context().Err()
 		if tunnelErr != nil {
 			slog.Warn(

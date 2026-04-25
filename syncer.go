@@ -16,6 +16,10 @@ type usageSyncOptions struct {
 	Concurrency int
 }
 
+func syncUsageNow(ctx context.Context, store *TokenStore, usageURL string, syncOpts usageSyncOptions) {
+	syncUsageOnce(ctx, store, newUsageSyncClient(), usageURL, syncOpts)
+}
+
 func runUsageSyncer(ctx context.Context, store *TokenStore, usageURL string, syncOpts usageSyncOptions) {
 	if syncOpts.Interval <= 0 {
 		slog.Error("usage sync disabled", "reason", "interval must be positive")
@@ -25,8 +29,7 @@ func runUsageSyncer(ctx context.Context, store *TokenStore, usageURL string, syn
 		slog.Error("usage sync disabled", "reason", "concurrency must be positive")
 		return
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
-	syncUsageOnce(ctx, store, client, usageURL, syncOpts)
+	client := newUsageSyncClient()
 	ticker := time.NewTicker(syncOpts.Interval)
 	defer ticker.Stop()
 	for {
@@ -39,7 +42,16 @@ func runUsageSyncer(ctx context.Context, store *TokenStore, usageURL string, syn
 	}
 }
 
+func newUsageSyncClient() *http.Client {
+	return &http.Client{Timeout: 15 * time.Second}
+}
+
 func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, usageURL string, syncOpts usageSyncOptions) {
+	if syncOpts.Concurrency <= 0 {
+		slog.Error("usage sync skipped", "reason", "concurrency must be positive")
+		return
+	}
+
 	refs := store.TokenRefs()
 	if len(refs) == 0 {
 		return

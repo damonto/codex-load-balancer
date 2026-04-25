@@ -10,7 +10,7 @@ import (
 	"syscall"
 )
 
-func tunnelWebSocket(ctx context.Context, w http.ResponseWriter, upstream *websocketUpstreamResponse, observer io.Writer) (int64, int64, error) {
+func tunnelWebSocket(ctx context.Context, w http.ResponseWriter, upstream *websocketUpstreamResponse, observer io.Writer, injectResponseTools bool, injectionCtx responseToolInjectionContext) (int64, int64, error) {
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		_ = upstream.conn.Close()
@@ -39,7 +39,7 @@ func tunnelWebSocket(ctx context.Context, w http.ResponseWriter, upstream *webso
 	}
 	resultCh := make(chan copyResult, 2)
 	go func() {
-		n, err := io.Copy(upstream.conn, clientRW.Reader)
+		n, err := copyWebsocketClientToUpstream(upstream.conn, clientRW.Reader, injectResponseTools, injectionCtx)
 		resultCh <- copyResult{clientToUpstream: true, n: n, err: err}
 	}()
 	go func() {

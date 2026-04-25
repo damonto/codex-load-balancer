@@ -60,6 +60,9 @@ func run(cfg appConfig) error {
 	defer closeRuntime(rt)
 	defer stop()
 
+	syncUsageNow(ctx, rt.store, usageEndpointURL, usageSyncOptions{
+		Concurrency: cfg.syncConcurrency,
+	})
 	startBackgroundWorkers(ctx, cfg, rt)
 
 	srv, err := newHTTPServer(cfg, rt)
@@ -139,7 +142,9 @@ func startBackgroundWorkers(ctx context.Context, cfg appConfig, rt *appRuntime) 
 	workerCtx, cancel := context.WithCancel(ctx)
 	rt.stopWorkers = cancel
 	rt.workerWG.Go(func() {
-		runTokenWatcher(workerCtx, rt.store, cfg.dataDir)
+		runTokenWatcher(workerCtx, rt.store, cfg.dataDir, usageEndpointURL, usageSyncOptions{
+			Concurrency: cfg.syncConcurrency,
+		})
 	})
 	rt.workerWG.Go(func() {
 		runUsageSyncer(workerCtx, rt.store, usageEndpointURL, usageSyncOptions{
