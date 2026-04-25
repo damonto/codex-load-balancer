@@ -19,10 +19,13 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          # - linux/386
+          - linux/386
           - linux/amd64
-          # - linux/arm64
-          # - linux/riscv64
+          - linux/arm/v6
+          - linux/arm/v7
+          - linux/arm64
+          - linux/ppc64le
+          - linux/s390x
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -35,6 +38,13 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Login to GHCR
         if: github.event_name != 'pull_request'
@@ -70,7 +80,7 @@ jobs:
           provenance: false
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
-          outputs: type=image,"name=ghcr.io/${{ github.repository_owner }}/codex-load-balancer",push-by-digest=true,name-canonical=true,push=${{ startsWith(github.ref, 'refs/tags/v') }}
+          outputs: type=image,"name=ghcr.io/${{ github.repository_owner }}/codex-load-balancer,docker.io/${{ secrets.DOCKERHUB_USERNAME }}/codex-load-balancer",push-by-digest=true,name-canonical=true,push=${{ startsWith(github.ref, 'refs/tags/v') }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -116,6 +126,7 @@ jobs:
         with:
           images: |
             ghcr.io/${{ github.repository_owner }}/codex-load-balancer
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/codex-load-balancer
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
@@ -143,6 +154,7 @@ jobs:
 
       - name: Inspect image
         run: |
+          docker buildx imagetools inspect docker.io/${{ secrets.DOCKERHUB_USERNAME }}/codex-load-balancer:${{ steps.meta.outputs.version }}
           docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/codex-load-balancer:${{ steps.meta.outputs.version }}
 
   cleanup:
