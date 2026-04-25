@@ -2,12 +2,12 @@ FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
-ARG VERSION=dev
+ARG BUILD_VERSION=dev
 
 COPY . .
 
 RUN set -eux \
-	&& CGO_ENABLED=0 go build -trimpath -ldflags="-w -s -X main.BuildVersion=${VERSION}" -o codex-load-balancer .
+	&& CGO_ENABLED=0 go build -trimpath -ldflags="-w -s -X main.BuildVersion=${BUILD_VERSION}" -o codex-load-balancer .
 
 FROM alpine:3.20 AS runner
 
