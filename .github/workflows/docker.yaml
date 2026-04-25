@@ -184,14 +184,3 @@ jobs:
         run: |
           docker buildx imagetools inspect docker.io/${{ secrets.DOCKERHUB_USERNAME }}/codex-load-balancer:${{ steps.meta.outputs.version }}
           docker buildx imagetools inspect ghcr.io/${{ github.repository_owner }}/codex-load-balancer:${{ steps.meta.outputs.version }}
-
-  cleanup:
-    name: Cleanup
-    runs-on: ubuntu-latest
-    needs:
-      - merge
-    steps:
-      - name: Delete Untagged Packages
-        uses: dataaxiom/ghcr-cleanup-action@v1
-        with:
-          token: ${{ github.token }}
