@@ -19,6 +19,8 @@ type TokenUsage struct {
 var sseDataPrefix = []byte("data:")
 var sseEventPrefix = []byte("event:")
 var sseResponseCompletedEvent = []byte("response.completed")
+var sseResponseFailedEvent = []byte("response.failed")
+var sseErrorEvent = []byte("error")
 var sseDonePayload = []byte("[DONE]")
 
 const (
@@ -209,10 +211,16 @@ type sseUsageCapture struct {
 	currentEvent []byte
 	usage        TokenUsage
 	found        bool
+	limitFound   bool
+	onLimit      func()
 }
 
 func newSSEUsageCapture() *sseUsageCapture {
 	return &sseUsageCapture{}
+}
+
+func newSSEUsageCaptureWithLimit(onLimit func()) *sseUsageCapture {
+	return &sseUsageCapture{onLimit: onLimit}
 }
 
 func (c *sseUsageCapture) Write(p []byte) (int, error) {
@@ -245,11 +253,14 @@ func (c *sseUsageCapture) Write(p []byte) (int, error) {
 		if !bytes.HasPrefix(payload, sseDataPrefix) {
 			continue
 		}
-		if !bytes.Equal(c.currentEvent, sseResponseCompletedEvent) {
-			continue
-		}
 		payload = bytes.TrimSpace(bytes.TrimPrefix(payload, sseDataPrefix))
 		if len(payload) == 0 || bytes.Equal(payload, sseDonePayload) {
+			continue
+		}
+		if c.shouldInspectLimitPayload(payload) && isLimitErrorBody(payload) {
+			c.markLimit()
+		}
+		if !bytes.Equal(c.currentEvent, sseResponseCompletedEvent) {
 			continue
 		}
 		usage, ok := extractTokenUsageFromJSON(payload)
@@ -270,6 +281,25 @@ func (c *sseUsageCapture) Usage() (TokenUsage, bool) {
 	return c.usage, true
 }
 
+func (c *sseUsageCapture) LimitError() bool {
+	return c != nil && c.limitFound
+}
+
+func (c *sseUsageCapture) shouldInspectLimitPayload(payload []byte) bool {
+	return bytes.Equal(c.currentEvent, sseResponseFailedEvent) ||
+		bytes.Equal(c.currentEvent, sseErrorEvent)
+}
+
+func (c *sseUsageCapture) markLimit() {
+	if c.limitFound {
+		return
+	}
+	c.limitFound = true
+	if c.onLimit != nil {
+		c.onLimit()
+	}
+}
+
 type websocketUsageCapture struct {
 	header     [14]byte
 	headerLen  int
@@ -285,13 +315,16 @@ type websocketUsageCapture struct {
 
 	messageOpcode byte
 	messageText   *websocketTextUsageCapture
+	messageLimit  *websocketTextLimitCapture
 	onUsage       func(TokenUsage)
+	onLimit       func()
 	usage         TokenUsage
 	found         bool
+	limitFound    bool
 }
 
-func newWebsocketUsageCapture(onUsage func(TokenUsage)) *websocketUsageCapture {
-	return &websocketUsageCapture{onUsage: onUsage}
+func newWebsocketUsageCapture(onUsage func(TokenUsage), onLimit func()) *websocketUsageCapture {
+	return &websocketUsageCapture{onUsage: onUsage, onLimit: onLimit}
 }
 
 func (c *websocketUsageCapture) Write(p []byte) (int, error) {
@@ -373,6 +406,7 @@ func (c *websocketUsageCapture) beginFrame() {
 		c.resetUnexpectedMessage()
 		c.messageOpcode = websocketOpcodeText
 		c.messageText = newStreamingWebsocketTextUsageCapture()
+		c.messageLimit = newWebsocketTextLimitCapture()
 	case websocketOpcodeBinary:
 		c.resetUnexpectedMessage()
 		c.messageOpcode = websocketOpcodeBinary
@@ -439,16 +473,29 @@ func (c *websocketUsageCapture) writeTextPayload(payload []byte) {
 	}
 	if err := c.messageText.Write(payload); err != nil {
 		c.discardTextMessage()
+		return
+	}
+	if c.messageLimit != nil {
+		c.messageLimit.Write(payload)
 	}
 }
 
 func (c *websocketUsageCapture) finishTextMessage() {
 	defer c.resetMessage()
-	if c.messageText == nil {
+	if c.messageText == nil && c.messageLimit == nil {
 		return
 	}
-	usage, ok, err := c.messageText.Finish()
+	if c.messageLimit != nil && c.messageLimit.LimitError() {
+		c.markLimit()
+	}
+	var usage TokenUsage
+	var ok bool
+	var err error
+	if c.messageText != nil {
+		usage, ok, err = c.messageText.Finish()
+	}
 	c.messageText = nil
+	c.messageLimit = nil
 	if err != nil || !ok {
 		return
 	}
@@ -459,12 +506,26 @@ func (c *websocketUsageCapture) finishTextMessage() {
 	}
 }
 
-func (c *websocketUsageCapture) discardTextMessage() {
-	if c.messageText == nil {
+func (c *websocketUsageCapture) LimitError() bool {
+	return c != nil && c.limitFound
+}
+
+func (c *websocketUsageCapture) markLimit() {
+	if c.limitFound {
 		return
 	}
-	c.messageText.Abort()
-	c.messageText = nil
+	c.limitFound = true
+	if c.onLimit != nil {
+		c.onLimit()
+	}
+}
+
+func (c *websocketUsageCapture) discardTextMessage() {
+	if c.messageText != nil {
+		c.messageText.Abort()
+		c.messageText = nil
+	}
+	c.messageLimit = nil
 }
 
 func (c *websocketUsageCapture) resetMessage() {
@@ -524,6 +585,34 @@ func (c *websocketTextUsageCapture) Abort() {
 	}
 	_ = c.writer.CloseWithError(io.ErrClosedPipe)
 	<-c.resultCh
+}
+
+type websocketTextLimitCapture struct {
+	buffer   bytes.Buffer
+	tooLarge bool
+}
+
+func newWebsocketTextLimitCapture() *websocketTextLimitCapture {
+	return &websocketTextLimitCapture{}
+}
+
+func (c *websocketTextLimitCapture) Write(payload []byte) {
+	if c == nil || c.tooLarge || len(payload) == 0 {
+		return
+	}
+	if c.buffer.Len()+len(payload) > defaultMaxRequestBody {
+		c.tooLarge = true
+		c.buffer.Reset()
+		return
+	}
+	_, _ = c.buffer.Write(payload)
+}
+
+func (c *websocketTextLimitCapture) LimitError() bool {
+	if c == nil || c.tooLarge {
+		return false
+	}
+	return isLimitErrorBody(c.buffer.Bytes())
 }
 
 func applyWebsocketMask(payload []byte, mask []byte) {

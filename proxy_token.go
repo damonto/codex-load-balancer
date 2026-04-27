@@ -67,10 +67,14 @@ func (s *Server) retryWithAlternateToken(tokenID string, tried map[string]bool, 
 
 func (s *Server) retryAfterUsageLimit(tokenID string, tried map[string]bool, attempt int) bool {
 	tried[tokenID] = true
+	s.markTokenUsageLimit(tokenID)
+	return attempt != 1 && s.store.HasAvailableToken(tried)
+}
+
+func (s *Server) markTokenUsageLimit(tokenID string) {
 	s.store.MarkCooldown(tokenID, time.Now().Add(defaultCooldownDuration))
 	slog.Info("token cooldown", "token", tokenID, "reason", "usage limit")
 	s.store.ClearSessionsForToken(tokenID)
-	return attempt != 1 && s.store.HasAvailableToken(tried)
 }
 
 func (s *Server) bindProxySession(sessionID string, prevTokenID string, token TokenState, sticky bool, logPrefix string) {

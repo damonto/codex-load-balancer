@@ -125,6 +125,32 @@ func TestExtractTokenUsageFromBodySSERequiresResponseCompletedEvent(t *testing.T
 	}
 }
 
+func TestSSEUsageCaptureDetectsLimitError(t *testing.T) {
+	reported := 0
+	capture := newSSEUsageCaptureWithLimit(func() {
+		reported++
+	})
+	body := "event: response.failed\n" +
+		"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"limit reached\"}}}\n\n"
+
+	if _, err := capture.Write([]byte(body)); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if !capture.LimitError() {
+		t.Fatal("LimitError() = false, want true")
+	}
+	if reported != 1 {
+		t.Fatalf("reported limit count = %d, want 1", reported)
+	}
+
+	if _, err := capture.Write([]byte(body)); err != nil {
+		t.Fatalf("Write() second error = %v", err)
+	}
+	if reported != 1 {
+		t.Fatalf("reported limit count after duplicate = %d, want 1", reported)
+	}
+}
+
 func TestWebsocketUsageCapture(t *testing.T) {
 	completed := []byte(`{"type":"response.completed","response":{"usage":{"input_tokens":55,"input_tokens_details":{"cached_tokens":15},"output_tokens":30,"output_tokens_details":{"reasoning_tokens":10}}}}`)
 	nonCompleted := []byte(`{"type":"response.output_text.delta","response":{"usage":{"input_tokens":1,"output_tokens":1}}}`)
@@ -216,7 +242,7 @@ func TestWebsocketUsageCapture(t *testing.T) {
 			reported := make([]TokenUsage, 0, len(tt.wantReported))
 			capture := newWebsocketUsageCapture(func(usage TokenUsage) {
 				reported = append(reported, usage)
-			})
+			}, nil)
 			for _, chunk := range tt.chunks {
 				if _, err := capture.Write(chunk); err != nil {
 					t.Fatalf("Write() error = %v", err)
@@ -238,6 +264,48 @@ func TestWebsocketUsageCapture(t *testing.T) {
 			}
 			if !slices.Equal(reported, tt.wantReported) {
 				t.Fatalf("reported usages = %+v, want %+v", reported, tt.wantReported)
+			}
+		})
+	}
+}
+
+func TestWebsocketUsageCaptureDetectsLimitError(t *testing.T) {
+	limitEvent := []byte(`{"type":"error","status":429,"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}`)
+	failedEvent := []byte(`{"type":"response.failed","response":{"error":{"code":"usage_limit_exceeded","message":"limit reached"}}}`)
+
+	tests := []struct {
+		name   string
+		chunks [][]byte
+	}{
+		{
+			name:   "wrapped error event",
+			chunks: [][]byte{websocketFrame(t, websocketOpcodeText, true, false, limitEvent)},
+		},
+		{
+			name: "fragmented response failed event",
+			chunks: [][]byte{bytes.Join([][]byte{
+				websocketFrame(t, websocketOpcodeText, false, false, failedEvent[:len(failedEvent)/2]),
+				websocketFrame(t, websocketOpcodeContinuation, true, false, failedEvent[len(failedEvent)/2:]),
+			}, nil)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reported := 0
+			capture := newWebsocketUsageCapture(nil, func() {
+				reported++
+			})
+			for _, chunk := range tt.chunks {
+				if _, err := capture.Write(chunk); err != nil {
+					t.Fatalf("Write() error = %v", err)
+				}
+			}
+			if !capture.LimitError() {
+				t.Fatal("LimitError() = false, want true")
+			}
+			if reported != 1 {
+				t.Fatalf("reported limit count = %d, want 1", reported)
 			}
 		})
 	}

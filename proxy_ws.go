@@ -100,6 +100,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 
 		usageCapture := newWebsocketUsageCapture(func(usage TokenUsage) {
 			s.recordTokenUsage(token, path, upstream.resp.StatusCode, true, usage)
+		}, func() {
+			s.markTokenUsageLimit(token.ID)
 		})
 		tunnelCtx, cancelTunnel := context.WithCancel(context.Background())
 		stopRequestClose := context.AfterFunc(r.Context(), cancelTunnel)

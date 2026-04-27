@@ -23,7 +23,7 @@ func TestHandleProxyPreservesUpstreamFailureWhenNoAlternateToken(t *testing.T) {
 		{
 			name:           "usage limit",
 			upstreamStatus: http.StatusTooManyRequests,
-			upstreamBody:   "You've hit your usage limit",
+			upstreamBody:   `{"error":{"type":"usage_limit_reached","message":"limit reached"}}`,
 		},
 	}
 
@@ -89,7 +89,7 @@ func TestHandleProxyClearsAllStickySessionsForRetriedToken(t *testing.T) {
 		{
 			name:           "usage limit",
 			upstreamStatus: http.StatusTooManyRequests,
-			upstreamBody:   "You've hit your usage limit",
+			upstreamBody:   `{"error":{"type":"usage_limit_reached","message":"limit reached"}}`,
 		},
 	}
 
@@ -164,6 +164,71 @@ func TestHandleProxyClearsAllStickySessionsForRetriedToken(t *testing.T) {
 				t.Fatalf("token a cooldown = %v, want future time", tokenA.CooldownUntil)
 			}
 		})
+	}
+}
+
+func TestHandleProxyStreamUsageLimitClearsStickySessions(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer token-a" {
+			t.Fatalf("Authorization = %q, want Bearer token-a", got)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.failed\n"))
+		_, _ = w.Write([]byte(`data: {"type":"response.failed","response":{"error":{"type":"usage_limit_reached","message":"limit reached"}}}` + "\n\n"))
+	}))
+	defer upstream.Close()
+
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+
+	store := NewTokenStore()
+	now := time.Now().UTC()
+	store.UpsertToken(TokenState{
+		ID:     "a.json",
+		Path:   "/tmp/a.json",
+		Token:  "token-a",
+		Weekly: WindowUsage{Known: true, LimitPercent: 100, UsedPercent: 10},
+	}, now)
+	store.UpsertToken(TokenState{
+		ID:     "b.json",
+		Path:   "/tmp/b.json",
+		Token:  "token-b",
+		Weekly: WindowUsage{Known: true, LimitPercent: 100, UsedPercent: 20},
+	}, now)
+	store.SetSession("request-session", "a.json")
+	store.SetSession("other-session", "a.json")
+
+	server := &Server{
+		store:       store,
+		client:      upstream.Client(),
+		upstreamURL: target,
+		apiKey:      "proxy-secret",
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-5"}`))
+	req.Header.Set("Authorization", "Bearer proxy-secret")
+	req.Header.Set("session_id", "request-session")
+	rr := httptest.NewRecorder()
+
+	server.handleProxy(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got, ok := store.SessionToken("request-session"); ok {
+		t.Fatalf("request-session still bound to %q, want cleared", got)
+	}
+	if got, ok := store.SessionToken("other-session"); ok {
+		t.Fatalf("other-session still bound to %q, want cleared", got)
+	}
+	tokenA, ok := store.TokenSnapshot("a.json")
+	if !ok {
+		t.Fatal("token a missing")
+	}
+	if !tokenA.CooldownUntil.After(time.Now()) {
+		t.Fatalf("token a cooldown = %v, want future time", tokenA.CooldownUntil)
 	}
 }
 
@@ -249,7 +314,7 @@ func TestHandleWebSocketPreservesUpstreamFailureWhenNoAlternateToken(t *testing.
 		{
 			name:           "usage limit",
 			upstreamStatus: http.StatusTooManyRequests,
-			upstreamBody:   "You've hit your usage limit",
+			upstreamBody:   `{"error":{"type":"usage_limit_reached","message":"limit reached"}}`,
 		},
 	}
 

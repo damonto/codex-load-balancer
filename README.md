@@ -117,7 +117,7 @@ If the bound token hits a limit error, Codex load balancer unbinds and reselects
 
 ## Rate Limit Handling
 
-If the upstream responds with status `429` or contains `"You've hit your usage limit"`, the current token is cooled down and the request is retried with another token.
+If the upstream responds with status `429`, returns a Codex `usage_limit_reached` error, or emits a streamed Responses/WebSocket limit failure, the current token is cooled down and its sticky sessions are cleared. Non-stream requests are retried once with another token.
 
 ## Usage Sync
 

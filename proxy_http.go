@@ -124,7 +124,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		s.bindProxySession(sessionID, prevTokenID, token, sticky, "")
 
 		if stream {
-			usageCapture := newSSEUsageCapture()
+			usageCapture := newSSEUsageCaptureWithLimit(func() {
+				s.markTokenUsageLimit(token.ID)
+			})
 			written, err := streamResponseWithObserver(w, resp, usageCapture)
 			if usage, ok := usageCapture.Usage(); ok {
 				s.recordTokenUsage(token, forwardPath, resp.StatusCode, true, usage)
