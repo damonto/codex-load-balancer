@@ -16,6 +16,13 @@ type proxyWebsocketFrame struct {
 	payload []byte
 }
 
+type websocketFrameHeader struct {
+	first      byte
+	payloadLen uint64
+	masked     bool
+	mask       [4]byte
+}
+
 func copyWebsocketClientToUpstream(dst io.Writer, src *bufio.Reader, injectResponseTools bool, injectionCtx responseToolInjectionContext) (int64, error) {
 	if !injectResponseTools {
 		return io.Copy(dst, src)
@@ -115,56 +122,79 @@ func writeToolInjectedTextFrame(dst io.Writer, payload []byte, injectionCtx resp
 }
 
 func readProxyWebsocketFrame(r *bufio.Reader) (proxyWebsocketFrame, error) {
-	first, err := r.ReadByte()
+	var rawHeader [14]byte
+	if _, err := io.ReadFull(r, rawHeader[:2]); err != nil {
+		return proxyWebsocketFrame{}, fmt.Errorf("read websocket header: %w", err)
+	}
+	headerLen := websocketFrameHeaderLen(rawHeader[:2])
+	if _, err := io.ReadFull(r, rawHeader[2:headerLen]); err != nil {
+		return proxyWebsocketFrame{}, fmt.Errorf("read websocket extended header: %w", err)
+	}
+	header, err := parseWebsocketFrameHeader(rawHeader[:headerLen])
 	if err != nil {
-		return proxyWebsocketFrame{}, fmt.Errorf("read websocket first byte: %w", err)
+		return proxyWebsocketFrame{}, err
 	}
-	second, err := r.ReadByte()
-	if err != nil {
-		return proxyWebsocketFrame{}, fmt.Errorf("read websocket second byte: %w", err)
-	}
-
-	payloadLen := uint64(second & 0x7F)
-	switch payloadLen {
-	case 126:
-		var ext [2]byte
-		if _, err := io.ReadFull(r, ext[:]); err != nil {
-			return proxyWebsocketFrame{}, fmt.Errorf("read websocket length16: %w", err)
-		}
-		payloadLen = uint64(binary.BigEndian.Uint16(ext[:]))
-	case 127:
-		var ext [8]byte
-		if _, err := io.ReadFull(r, ext[:]); err != nil {
-			return proxyWebsocketFrame{}, fmt.Errorf("read websocket length64: %w", err)
-		}
-		payloadLen = binary.BigEndian.Uint64(ext[:])
-	}
-	if payloadLen > defaultMaxRequestBody {
+	if header.payloadLen > defaultMaxRequestBody {
 		return proxyWebsocketFrame{}, fmt.Errorf("websocket payload too large")
 	}
 
-	var mask [4]byte
-	masked := second&0x80 != 0
-	if masked {
-		if _, err := io.ReadFull(r, mask[:]); err != nil {
-			return proxyWebsocketFrame{}, fmt.Errorf("read websocket mask: %w", err)
-		}
-	}
-
-	payload := make([]byte, payloadLen)
+	payload := make([]byte, header.payloadLen)
 	if _, err := io.ReadFull(r, payload); err != nil {
 		return proxyWebsocketFrame{}, fmt.Errorf("read websocket payload: %w", err)
 	}
-	if masked {
-		applyWebsocketMask(payload, mask[:])
+	if header.masked {
+		applyWebsocketMask(payload, header.mask[:])
 	}
 
 	return proxyWebsocketFrame{
-		opcode:  first & 0x0F,
-		fin:     first&0x80 != 0,
-		rsv:     first & 0x70,
+		opcode:  header.first & 0x0F,
+		fin:     header.first&0x80 != 0,
+		rsv:     header.first & 0x70,
 		payload: payload,
 	}, nil
+}
+
+func websocketFrameHeaderLen(header []byte) int {
+	if len(header) < 2 {
+		return 2
+	}
+	need := 2
+	switch header[1] & 0x7F {
+	case 126:
+		need += 2
+	case 127:
+		need += 8
+	}
+	if header[1]&0x80 != 0 {
+		need += 4
+	}
+	return need
+}
+
+func parseWebsocketFrameHeader(header []byte) (websocketFrameHeader, error) {
+	need := websocketFrameHeaderLen(header)
+	if len(header) < need {
+		return websocketFrameHeader{}, fmt.Errorf("websocket header too short")
+	}
+
+	parsed := websocketFrameHeader{
+		first:      header[0],
+		payloadLen: uint64(header[1] & 0x7F),
+		masked:     header[1]&0x80 != 0,
+	}
+	offset := 2
+	switch parsed.payloadLen {
+	case 126:
+		parsed.payloadLen = uint64(binary.BigEndian.Uint16(header[offset : offset+2]))
+		offset += 2
+	case 127:
+		parsed.payloadLen = binary.BigEndian.Uint64(header[offset : offset+8])
+		offset += 8
+	}
+	if parsed.masked {
+		copy(parsed.mask[:], header[offset:offset+4])
+	}
+	return parsed, nil
 }
 
 func writeProxyWebsocketFrame(w io.Writer, frame proxyWebsocketFrame, masked bool) (int64, error) {

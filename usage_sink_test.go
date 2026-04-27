@@ -186,6 +186,69 @@ func TestUsageSinkOverflowAggregatesRecords(t *testing.T) {
 	}
 }
 
+func TestUsageSinkOverflowPreservesRequestDimensions(t *testing.T) {
+	usageDB, err := openUsageDB(filepath.Join(t.TempDir(), "clb.db"))
+	if err != nil {
+		t.Fatalf("openUsageDB() error = %v", err)
+	}
+	defer usageDB.Close()
+
+	sink := NewUsageSink(usageDB, 2)
+	records := []UsageRecord{
+		{
+			AccountKey: "acct-1",
+			TokenID:    "queued-1",
+			Path:       "/responses",
+			StatusCode: 200,
+			CreatedAt:  time.Date(2026, 4, 17, 10, 0, 0, 0, time.UTC),
+		},
+		{
+			AccountKey: "acct-1",
+			TokenID:    "queued-2",
+			Path:       "/responses",
+			StatusCode: 200,
+			CreatedAt:  time.Date(2026, 4, 17, 10, 1, 0, 0, time.UTC),
+		},
+		{
+			AccountKey:  "acct-1",
+			TokenID:     "token-1",
+			Path:        "/responses",
+			StatusCode:  200,
+			InputTokens: 10,
+			CreatedAt:   time.Date(2026, 4, 17, 10, 5, 0, 0, time.UTC),
+		},
+		{
+			AccountKey:  "acct-1",
+			TokenID:     "token-1",
+			Path:        "/models",
+			StatusCode:  429,
+			InputTokens: 20,
+			CreatedAt:   time.Date(2026, 4, 17, 10, 6, 0, 0, time.UTC),
+		},
+	}
+	for i, rec := range records {
+		if err := sink.Record(rec); err != nil {
+			t.Fatalf("Record(%d) error = %v", i, err)
+		}
+	}
+
+	if got := len(sink.overflow); got != 2 {
+		t.Fatalf("len(overflow) = %d, want 2", got)
+	}
+
+	sink.Run()
+	sink.Stop()
+	sink.Wait()
+
+	var gotCount int
+	if err := usageDB.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM usage_events`).Scan(&gotCount); err != nil {
+		t.Fatalf("count usage events: %v", err)
+	}
+	if gotCount != len(records) {
+		t.Fatalf("usage event count = %d, want %d", gotCount, len(records))
+	}
+}
+
 func TestUsageSinkRecordReturnsFullWhenQueueAndOverflowSaturated(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -134,8 +134,6 @@ Endpoints:
 ```
 GET /stats
 GET /stats/overview
-GET /stats/accounts/details
-GET /stats/account?account_key=<account_id>
 ```
 
 Auth:
@@ -147,8 +145,6 @@ Dashboard data:
 - Overview cards: `today`, `recent_7_days`, `recent_30_days`, `total` with `input_tokens`, `cached_tokens`, `output_tokens`, `reasoning_tokens`.
 - Current dashboard page load uses only `/stats/overview`.
 - Account table: `email`, `plan_type`, totals, and 5-hour / weekly quota usage from usage sync (`/backend-api/wham/usage`).
-- Future detail view can use `/stats/accounts/details` for batched `daily` / `weekly` / `monthly` token trends.
-- `/stats/account` remains available for single-account drill-down.
 
 ## Logs
 

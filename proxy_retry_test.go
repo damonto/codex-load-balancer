@@ -75,6 +75,98 @@ func TestHandleProxyPreservesUpstreamFailureWhenNoAlternateToken(t *testing.T) {
 	}
 }
 
+func TestHandleProxyClearsAllStickySessionsForRetriedToken(t *testing.T) {
+	tests := []struct {
+		name           string
+		upstreamStatus int
+		upstreamBody   string
+	}{
+		{
+			name:           "unauthorized",
+			upstreamStatus: http.StatusUnauthorized,
+			upstreamBody:   "upstream unauthorized",
+		},
+		{
+			name:           "usage limit",
+			upstreamStatus: http.StatusTooManyRequests,
+			upstreamBody:   "You've hit your usage limit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Header.Get("Authorization") {
+				case "Bearer token-a":
+					w.WriteHeader(tt.upstreamStatus)
+					_, _ = w.Write([]byte(tt.upstreamBody))
+				case "Bearer token-b":
+					_, _ = w.Write([]byte("ok"))
+				default:
+					t.Fatalf("unexpected Authorization = %q", r.Header.Get("Authorization"))
+				}
+			}))
+			defer upstream.Close()
+
+			target, err := url.Parse(upstream.URL)
+			if err != nil {
+				t.Fatalf("url.Parse() error = %v", err)
+			}
+
+			store := NewTokenStore()
+			now := time.Now().UTC()
+			store.UpsertToken(TokenState{
+				ID:     "a.json",
+				Path:   "/tmp/a.json",
+				Token:  "token-a",
+				Weekly: WindowUsage{Known: true, LimitPercent: 100, UsedPercent: 50},
+			}, now)
+			store.UpsertToken(TokenState{
+				ID:     "b.json",
+				Path:   "/tmp/b.json",
+				Token:  "token-b",
+				Weekly: WindowUsage{Known: true, LimitPercent: 100, UsedPercent: 10},
+			}, now)
+			store.SetSession("request-session", "a.json")
+			store.SetSession("other-session", "a.json")
+
+			server := &Server{
+				store:       store,
+				client:      upstream.Client(),
+				upstreamURL: target,
+				apiKey:      "proxy-secret",
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-5"}`))
+			req.Header.Set("Authorization", "Bearer proxy-secret")
+			req.Header.Set("session_id", "request-session")
+			rr := httptest.NewRecorder()
+
+			server.handleProxy(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d, body = %s", rr.Code, http.StatusOK, rr.Body.String())
+			}
+			if got := rr.Body.String(); got != "ok" {
+				t.Fatalf("body = %q, want ok", got)
+			}
+			if got, ok := store.SessionToken("request-session"); !ok || got != "b.json" {
+				t.Fatalf("request-session = %q, %v; want b.json, true", got, ok)
+			}
+			if got, ok := store.SessionToken("other-session"); ok {
+				t.Fatalf("other-session still bound to %q, want cleared", got)
+			}
+			tokenA, ok := store.TokenSnapshot("a.json")
+			if !ok {
+				t.Fatal("token a missing")
+			}
+			if !tokenA.CooldownUntil.After(time.Now()) {
+				t.Fatalf("token a cooldown = %v, want future time", tokenA.CooldownUntil)
+			}
+		})
+	}
+}
+
 func TestHandleProxyForwardsModelsRequest(t *testing.T) {
 	tests := []struct {
 		name     string

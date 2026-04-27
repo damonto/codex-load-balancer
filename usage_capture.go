@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -351,49 +350,21 @@ func (c *websocketUsageCapture) consumeHeader(p []byte) int {
 	return consumed
 }
 
-func websocketFrameHeaderLen(header []byte) int {
-	if len(header) < 2 {
-		return 2
-	}
-	need := 2
-	switch header[1] & 0x7F {
-	case 126:
-		need += 2
-	case 127:
-		need += 8
-	}
-	if header[1]&0x80 != 0 {
-		need += 4
-	}
-	return need
-}
-
 func (c *websocketUsageCapture) beginFrame() {
-	first := c.header[0]
-	second := c.header[1]
-
-	payloadLen := uint64(second & 0x7F)
-	offset := 2
-	switch payloadLen {
-	case 126:
-		payloadLen = uint64(binary.BigEndian.Uint16(c.header[offset : offset+2]))
-		offset += 2
-	case 127:
-		payloadLen = binary.BigEndian.Uint64(c.header[offset : offset+8])
-		offset += 8
+	header, err := parseWebsocketFrameHeader(c.header[:c.headerNeed])
+	if err != nil {
+		c.headerLen = 0
+		c.headerNeed = 0
+		return
 	}
 
 	c.frameActive = true
-	c.frameFin = first&0x80 != 0
-	c.frameOpcode = first & 0x0F
-	c.framePayloadRemaining = payloadLen
-	c.frameMasked = second&0x80 != 0
+	c.frameFin = header.first&0x80 != 0
+	c.frameOpcode = header.first & 0x0F
+	c.framePayloadRemaining = header.payloadLen
+	c.frameMasked = header.masked
 	c.frameMaskOffset = 0
-	if c.frameMasked {
-		copy(c.frameMask[:], c.header[offset:offset+4])
-	} else {
-		clear(c.frameMask[:])
-	}
+	c.frameMask = header.mask
 	c.headerLen = 0
 	c.headerNeed = 0
 

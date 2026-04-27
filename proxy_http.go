@@ -53,7 +53,14 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	var retryResp *http.Response
 	var retryBody []byte
 	for attempt := range 2 {
-		token, sticky, err := s.store.SelectToken(sessionID, tried)
+		token, sticky, err := s.selectProxyToken(
+			r.Context(),
+			sessionID,
+			tried,
+			attempt,
+			"token select",
+			"token refresh failed",
+		)
 		if err != nil {
 			if retryResp != nil {
 				if err := writeResponse(w, retryResp, retryBody); err != nil {
@@ -64,21 +71,6 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "no available tokens", http.StatusServiceUnavailable)
 			return
 		}
-		reason := "ranked"
-		if sticky {
-			reason = "sticky"
-		}
-		slog.Info("token select", "token", token.ID, "reason", reason, "session", sessionID, "attempt", attempt+1)
-
-		refreshed, err := maybeRefreshTokenIfStale(r.Context(), s.store, token.ID, defaultProxyRefreshConfig())
-		if err != nil {
-			slog.Warn("token refresh failed", "token", token.ID, "err", err)
-		}
-		if refreshed {
-			if updated, ok := s.store.TokenSnapshot(token.ID); ok {
-				token = updated
-			}
-		}
 
 		bodyForToken := responseBodyForToken(forwardPath, body, token, sessionID)
 		resp, respBody, stream, err := s.forwardRequest(r, bodyForToken, token, forwardPath)
@@ -88,20 +80,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if resp.StatusCode == http.StatusUnauthorized {
-			refreshed, err := maybeRefreshToken(r.Context(), s.store, token.ID, defaultProxyRefreshConfig())
-			if err != nil {
-				if isPermanentRefreshError(err) {
-					slog.Warn("token refresh permanently failed", "token", token.ID, "err", err)
-					s.store.MarkInvalid(token.ID)
-				} else {
-					slog.Warn("token refresh failed", "token", token.ID, "err", err)
-					s.store.MarkCooldown(token.ID, time.Now().Add(defaultCooldownDuration))
-				}
-			}
-			if refreshed {
-				if updated, ok := s.store.TokenSnapshot(token.ID); ok {
-					token = updated
-				}
+			if s.refreshTokenAfterUnauthorized(r.Context(), &token, "") {
 				bodyForToken = responseBodyForToken(forwardPath, body, token, sessionID)
 				resp, respBody, stream, err = s.forwardRequest(r, bodyForToken, token, forwardPath)
 				if err != nil {
@@ -113,11 +92,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if resp.StatusCode == http.StatusUnauthorized {
-			tried[token.ID] = true
-			if sessionID != "" {
-				s.store.ClearSession(sessionID)
-			}
-			if attempt == 1 || !s.store.HasAvailableToken(tried) {
+			if !s.retryWithAlternateToken(token.ID, tried, attempt) {
 				if err := writeResponse(w, resp, respBody); err != nil {
 					slog.Warn("write unauthorized response", "token", token.ID, "session", sessionID, "err", err)
 				}
@@ -135,13 +110,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !stream && isLimitError(resp.StatusCode, respBody) {
-			tried[token.ID] = true
-			s.store.MarkCooldown(token.ID, time.Now().Add(defaultCooldownDuration))
-			slog.Info("token cooldown", "token", token.ID, "reason", "usage limit")
-			if sessionID != "" {
-				s.store.ClearSession(sessionID)
-			}
-			if attempt == 1 || !s.store.HasAvailableToken(tried) {
+			if !s.retryAfterUsageLimit(token.ID, tried, attempt) {
 				if err := writeResponse(w, resp, respBody); err != nil {
 					slog.Warn("write limit response", "token", token.ID, "session", sessionID, "err", err)
 				}
@@ -152,14 +121,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if sessionID != "" && !sticky {
-			s.store.SetSession(sessionID, token.ID)
-			if prevTokenID != "" && prevTokenID != token.ID {
-				slog.Info("session switched", "session", sessionID, "from", prevTokenID, "to", token.ID)
-			} else if prevTokenID == "" {
-				slog.Info("session bound", "session", sessionID, "token", token.ID)
-			}
-		}
+		s.bindProxySession(sessionID, prevTokenID, token, sticky, "")
 
 		if stream {
 			usageCapture := newSSEUsageCapture()

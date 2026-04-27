@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"time"
@@ -71,11 +70,7 @@ func fetchUsage(ctx context.Context, client *http.Client, usageURL string, ref T
 		return UsageSnapshot{}, errUnauthorized
 	}
 	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return UsageSnapshot{}, fmt.Errorf("read usage response: %w", err)
-		}
-		return UsageSnapshot{}, fmt.Errorf("usage request status %d: %s", resp.StatusCode, string(body))
+		return UsageSnapshot{}, fmt.Errorf("usage request status %d", resp.StatusCode)
 	}
 
 	var payload rateLimitStatusPayload

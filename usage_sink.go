@@ -13,6 +13,10 @@ var errUsageSinkFull = errors.New("usage sink full")
 
 type usageOverflowKey struct {
 	AccountKey string
+	TokenID    string
+	Path       string
+	StatusCode int
+	IsStream   bool
 	BucketUnix int64
 }
 
@@ -135,6 +139,8 @@ func (s *UsageSink) queueOverflow(rec UsageRecord) error {
 	if len(s.overflow) >= s.overflowCapacity {
 		return errUsageSinkFull
 	}
+	// Overflow is a bounded-memory fallback: preserve request dimensions while
+	// coalescing token counts into an hourly bucket.
 	rec.CreatedAt = time.Unix(key.BucketUnix, 0).UTC()
 	s.overflow[key] = rec
 	return nil
@@ -148,6 +154,10 @@ func usageOverflowBucket(rec UsageRecord) usageOverflowKey {
 	createdAt = createdAt.UTC().Truncate(time.Hour)
 	return usageOverflowKey{
 		AccountKey: rec.AccountKey,
+		TokenID:    rec.TokenID,
+		Path:       rec.Path,
+		StatusCode: rec.StatusCode,
+		IsStream:   rec.IsStream,
 		BucketUnix: createdAt.Unix(),
 	}
 }

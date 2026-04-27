@@ -53,23 +53,6 @@ func (s AccountUsageSummary) TotalTokens() int64 {
 	return s.InputTokens + s.CachedTokens + s.OutputTokens
 }
 
-type UsagePoint struct {
-	Bucket       string `json:"bucket"`
-	InputTokens  int64  `json:"input_tokens"`
-	CachedTokens int64  `json:"cached_tokens"`
-	OutputTokens int64  `json:"output_tokens"`
-}
-
-func (p UsagePoint) TotalTokens() int64 {
-	return p.InputTokens + p.CachedTokens + p.OutputTokens
-}
-
-type AccountUsageTrends struct {
-	Daily   []UsagePoint `json:"daily"`
-	Weekly  []UsagePoint `json:"weekly"`
-	Monthly []UsagePoint `json:"monthly"`
-}
-
 type UsageDB struct {
 	db *sql.DB
 }
@@ -90,8 +73,7 @@ INSERT INTO usage_events (
 `
 
 func openUsageDB(path string) (*UsageDB, error) {
-	dsn := fmt.Sprintf("file:%s?mode=rwc&_journal_mode=WAL&_synchronous=NORMAL", path)
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", usageDBDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open usage db: %w", err)
 	}
@@ -109,6 +91,10 @@ func openUsageDB(path string) (*UsageDB, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func usageDBDSN(path string) string {
+	return fmt.Sprintf("file:%s?mode=rwc&_journal_mode=WAL&_synchronous=NORMAL&_pragma=busy_timeout(5000)", path)
 }
 
 func (s *UsageDB) Close() error {
@@ -363,8 +349,20 @@ FROM account_quotas
 	return overrides, nil
 }
 
-func (s *UsageDB) accountSummaries(ctx context.Context, cutoff5h time.Time, cutoffWeek time.Time) (map[string]*AccountUsageSummary, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func (s *UsageDB) accountSummaries(ctx context.Context, accountKeys []string, cutoff5h time.Time, cutoffWeek time.Time) (map[string]*AccountUsageSummary, error) {
+	if len(accountKeys) == 0 {
+		return map[string]*AccountUsageSummary{}, nil
+	}
+
+	placeholders := make([]string, 0, len(accountKeys))
+	args := make([]any, 0, 2+len(accountKeys))
+	args = append(args, cutoff5h.Unix(), cutoffWeek.Unix())
+	for _, accountKey := range accountKeys {
+		placeholders = append(placeholders, "?")
+		args = append(args, accountKey)
+	}
+
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
 SELECT
 	account_key,
 	COALESCE(SUM(input_tokens), 0),
@@ -374,8 +372,9 @@ SELECT
 	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN input_tokens + cached_tokens + output_tokens ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN input_tokens + cached_tokens + output_tokens ELSE 0 END), 0)
 FROM usage_events
+WHERE account_key IN (%s)
 GROUP BY account_key
-`, cutoff5h.Unix(), cutoffWeek.Unix())
+`, strings.Join(placeholders, ", ")), args...)
 	if err != nil {
 		return nil, fmt.Errorf("query account summaries: %w", err)
 	}
@@ -412,8 +411,13 @@ func (s *UsageDB) ListAccountSummaries(
 	now := time.Now().UTC()
 	cutoff5h := now.Add(-5 * time.Hour)
 	cutoffWeek := weekStartUTC(now)
+	accountKeys := make([]string, 0, len(activeAccountTokens))
+	for accountKey := range activeAccountTokens {
+		accountKeys = append(accountKeys, accountKey)
+	}
+	slices.Sort(accountKeys)
 
-	summariesByAccount, err := s.accountSummaries(ctx, cutoff5h, cutoffWeek)
+	summariesByAccount, err := s.accountSummaries(ctx, accountKeys, cutoff5h, cutoffWeek)
 	if err != nil {
 		return nil, err
 	}
@@ -457,120 +461,6 @@ func (s *UsageDB) ListAccountSummaries(
 		return cmp.Compare(a.AccountKey, b.AccountKey)
 	})
 	return results, nil
-}
-
-func (s *UsageDB) AccountTrends(ctx context.Context, accountKey string) ([]UsagePoint, []UsagePoint, []UsagePoint, error) {
-	trendsByAccount, err := s.AccountTrendsBatch(ctx, []string{accountKey})
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	trends := trendsByAccount[accountKey]
-	return trends.Daily, trends.Weekly, trends.Monthly, nil
-}
-
-func (s *UsageDB) AccountTrendsBatch(ctx context.Context, accountKeys []string) (map[string]AccountUsageTrends, error) {
-	keys := slices.Clone(accountKeys)
-	slices.Sort(keys)
-	keys = slices.Compact(keys)
-
-	trendsByAccount := make(map[string]AccountUsageTrends, len(keys))
-	for _, accountKey := range keys {
-		trendsByAccount[accountKey] = AccountUsageTrends{
-			Daily:   []UsagePoint{},
-			Weekly:  []UsagePoint{},
-			Monthly: []UsagePoint{},
-		}
-	}
-	if len(keys) == 0 {
-		return trendsByAccount, nil
-	}
-
-	daily, err := s.queryTrendsByAccounts(ctx, keys, "%Y-%m-%d", 30)
-	if err != nil {
-		return nil, err
-	}
-	weekly, err := s.queryTrendsByAccounts(ctx, keys, "%Y-W%W", 16)
-	if err != nil {
-		return nil, err
-	}
-	monthly, err := s.queryTrendsByAccounts(ctx, keys, "%Y-%m", 12)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, accountKey := range keys {
-		trends := trendsByAccount[accountKey]
-		if points, ok := daily[accountKey]; ok {
-			trends.Daily = points
-		}
-		if points, ok := weekly[accountKey]; ok {
-			trends.Weekly = points
-		}
-		if points, ok := monthly[accountKey]; ok {
-			trends.Monthly = points
-		}
-		trendsByAccount[accountKey] = trends
-	}
-	return trendsByAccount, nil
-}
-
-func (s *UsageDB) queryTrendsByAccounts(
-	ctx context.Context,
-	accountKeys []string,
-	format string,
-	limit int,
-) (map[string][]UsagePoint, error) {
-	placeholders := make([]string, 0, len(accountKeys))
-	args := make([]any, 0, 1+len(accountKeys))
-	args = append(args, format)
-	for _, accountKey := range accountKeys {
-		placeholders = append(placeholders, "?")
-		args = append(args, accountKey)
-	}
-
-	query := fmt.Sprintf(`
-SELECT
-	account_key,
-	strftime(?, created_at_unix, 'unixepoch') AS bucket,
-	COALESCE(SUM(input_tokens), 0),
-	COALESCE(SUM(cached_tokens), 0),
-	COALESCE(SUM(output_tokens), 0)
-FROM usage_events
-WHERE account_key IN (%s)
-GROUP BY account_key, bucket
-ORDER BY account_key ASC, bucket DESC
-	`, strings.Join(placeholders, ", "))
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query trends by account: %w", err)
-	}
-	defer rows.Close()
-
-	pointsByAccount := make(map[string][]UsagePoint, len(accountKeys))
-	counts := make(map[string]int, len(accountKeys))
-	for rows.Next() {
-		var accountKey string
-		var point UsagePoint
-		if err := rows.Scan(&accountKey, &point.Bucket, &point.InputTokens, &point.CachedTokens, &point.OutputTokens); err != nil {
-			return nil, fmt.Errorf("scan trend point: %w", err)
-		}
-		if counts[accountKey] >= limit {
-			continue
-		}
-		pointsByAccount[accountKey] = append(pointsByAccount[accountKey], point)
-		counts[accountKey]++
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate trend points: %w", err)
-	}
-
-	for accountKey, points := range pointsByAccount {
-		slices.Reverse(points)
-		pointsByAccount[accountKey] = points
-	}
-	return pointsByAccount, nil
 }
 
 type AccountQuota struct {

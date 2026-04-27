@@ -137,6 +137,16 @@ func hasToolType(body []byte, toolType string) bool {
 	return toolsContainType(request.Tools, toolType)
 }
 
+func toolsContainType(tools []json.RawMessage, toolType string) bool {
+	for _, rawTool := range tools {
+		gotType, ok := responseToolType(rawTool)
+		if ok && gotType == toolType {
+			return true
+		}
+	}
+	return false
+}
+
 func countToolType(body []byte, toolType string) int {
 	var request struct {
 		Tools []json.RawMessage `json:"tools"`

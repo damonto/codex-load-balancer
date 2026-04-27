@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -181,16 +180,9 @@ func refreshAccessToken(ctx context.Context, refreshToken string) (string, strin
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return "", "", refreshTokenError{
-				permanent: false,
-				err:       fmt.Errorf("read refresh response: %w", err),
-			}
-		}
 		return "", "", refreshTokenError{
 			permanent: false,
-			err:       fmt.Errorf("refresh request status %d: %s", resp.StatusCode, string(body)),
+			err:       fmt.Errorf("refresh request status %d", resp.StatusCode),
 		}
 	}
 

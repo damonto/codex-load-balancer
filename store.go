@@ -1,10 +1,8 @@
 package main
 
 import (
-	"cmp"
 	"errors"
 	"path/filepath"
-	"slices"
 	"sync"
 	"time"
 )
@@ -19,17 +17,6 @@ type WindowUsage struct {
 	ResetAfterSeconds int
 }
 
-func (w WindowUsage) RemainingPercent() float64 {
-	if !w.Known || w.LimitPercent <= 0 {
-		return 1.0
-	}
-	remaining := w.LimitPercent - w.UsedPercent
-	if remaining < 0 {
-		return 0
-	}
-	return remaining / w.LimitPercent
-}
-
 func (w WindowUsage) RemainingPoints() float64 {
 	if !w.Known || w.LimitPercent <= 0 {
 		return defaultLimitPoints
@@ -39,13 +26,6 @@ func (w WindowUsage) RemainingPoints() float64 {
 		return 0
 	}
 	return remaining
-}
-
-func (w WindowUsage) LimitForRanking() float64 {
-	if w.Known && w.LimitPercent > 0 {
-		return w.LimitPercent
-	}
-	return defaultLimitPoints
 }
 
 type TokenState struct {
@@ -78,32 +58,6 @@ func (t TokenState) Available(now time.Time) bool {
 		return false
 	}
 	return true
-}
-
-func (s *TokenStore) LimitsExhausted() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if len(s.tokens) == 0 {
-		return false
-	}
-	seen := false
-	for _, token := range s.tokens {
-		if token.Invalid {
-			continue
-		}
-		seen = true
-		exhausted := false
-		if token.FiveHour.Known && token.FiveHour.RemainingPoints() <= 0 {
-			exhausted = true
-		}
-		if token.Weekly.Known && token.Weekly.RemainingPoints() <= 0 {
-			exhausted = true
-		}
-		if !exhausted {
-			return false
-		}
-	}
-	return seen
 }
 
 type TokenStore struct {
@@ -371,10 +325,9 @@ func (s *TokenStore) RefreshLock(id string) *sync.Mutex {
 }
 
 type TokenCandidate struct {
-	Token                    TokenState
-	WeeklyLimitPoints        float64
-	FiveHourRemainingPoints  float64
-	FiveHourRemainingPercent float64
+	Token                   TokenState
+	FiveHourRemainingPoints float64
+	WeeklyRemainingPoints   float64
 }
 
 func (s *TokenStore) SelectToken(sessionID string, tried map[string]bool) (TokenState, bool, error) {
@@ -407,10 +360,9 @@ func (s *TokenStore) availableCandidates(now time.Time, tried map[string]bool) [
 			continue
 		}
 		candidates = append(candidates, TokenCandidate{
-			Token:                    *token,
-			WeeklyLimitPoints:        token.Weekly.LimitForRanking(),
-			FiveHourRemainingPoints:  token.FiveHour.RemainingPoints(),
-			FiveHourRemainingPercent: token.FiveHour.RemainingPercent(),
+			Token:                   *token,
+			FiveHourRemainingPoints: token.FiveHour.RemainingPoints(),
+			WeeklyRemainingPoints:   token.Weekly.RemainingPoints(),
 		})
 	}
 	s.mu.RUnlock()
@@ -433,37 +385,28 @@ func (s *TokenStore) HasAvailableToken(tried map[string]bool) bool {
 }
 
 func selectBestCandidate(candidates []TokenCandidate) TokenState {
-	slices.SortStableFunc(candidates, func(a, b TokenCandidate) int {
-		if a.WeeklyLimitPoints != b.WeeklyLimitPoints {
-			return cmp.Compare(b.WeeklyLimitPoints, a.WeeklyLimitPoints)
-		}
-		// When weekly limits tie, favor higher 5-hour remaining to keep capacity available.
-		return cmp.Compare(b.FiveHourRemainingPoints, a.FiveHourRemainingPoints)
-	})
-
-	top := candidates[0]
-	// Rescue: if the top candidate is nearly exhausted on the 5-hour window (<30%),
-	// prefer a lower-limit account that has more short-term headroom. This avoids
-	// burning through the highest-limit account's 5h window when a lesser account
-	// can service the request without pressure.
-	if top.FiveHourRemainingPercent < 0.3 {
-		bestIdx := -1
-		for i := 1; i < len(candidates); i++ {
-			if candidates[i].WeeklyLimitPoints >= top.WeeklyLimitPoints {
-				continue
-			}
-			if candidates[i].FiveHourRemainingPoints <= top.FiveHourRemainingPoints {
-				continue
-			}
-			if bestIdx == -1 || candidates[i].FiveHourRemainingPoints > candidates[bestIdx].FiveHourRemainingPoints {
-				bestIdx = i
-			}
-		}
-		if bestIdx != -1 {
-			return candidates[bestIdx].Token
+	best := candidates[0]
+	for _, candidate := range candidates[1:] {
+		if betterTokenCandidate(candidate, best) {
+			best = candidate
 		}
 	}
-	return top.Token
+	return best.Token
+}
+
+func betterTokenCandidate(candidate TokenCandidate, current TokenCandidate) bool {
+	candidateBottleneck := min(candidate.FiveHourRemainingPoints, candidate.WeeklyRemainingPoints)
+	currentBottleneck := min(current.FiveHourRemainingPoints, current.WeeklyRemainingPoints)
+	if candidateBottleneck != currentBottleneck {
+		return candidateBottleneck > currentBottleneck
+	}
+	if candidate.FiveHourRemainingPoints != current.FiveHourRemainingPoints {
+		return candidate.FiveHourRemainingPoints > current.FiveHourRemainingPoints
+	}
+	if candidate.WeeklyRemainingPoints != current.WeeklyRemainingPoints {
+		return candidate.WeeklyRemainingPoints > current.WeeklyRemainingPoints
+	}
+	return candidate.Token.ID < current.Token.ID
 }
 
 type AccountInfo struct {

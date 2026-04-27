@@ -9,7 +9,6 @@ import (
 	"math"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -55,30 +54,6 @@ type dashboardAccount struct {
 	QuotaWeekTokens int64      `json:"quota_week_tokens"`
 	HasWeekQuota    bool       `json:"has_week_quota"`
 	WeeklyResetAt   *time.Time `json:"weekly_reset_at"`
-}
-
-type dashboardAccountResponse struct {
-	AccountKey      string       `json:"account_key"`
-	Quota5hTokens   int64        `json:"quota_5h_tokens"`
-	QuotaWeekTokens int64        `json:"quota_week_tokens"`
-	Has5hQuota      bool         `json:"has_5h_quota"`
-	FiveHourResetAt *time.Time   `json:"five_hour_reset_at"`
-	HasWeekQuota    bool         `json:"has_week_quota"`
-	WeeklyResetAt   *time.Time   `json:"weekly_reset_at"`
-	Daily           []UsagePoint `json:"daily"`
-	Weekly          []UsagePoint `json:"weekly"`
-	Monthly         []UsagePoint `json:"monthly"`
-}
-
-type dashboardAccountsDetailsResponse struct {
-	Accounts []dashboardAccountDetails `json:"accounts"`
-}
-
-type dashboardAccountDetails struct {
-	AccountKey string       `json:"account_key"`
-	Daily      []UsagePoint `json:"daily"`
-	Weekly     []UsagePoint `json:"weekly"`
-	Monthly    []UsagePoint `json:"monthly"`
 }
 
 func handleDashboardAsset(w http.ResponseWriter, r *http.Request) {
@@ -196,100 +171,6 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 	enc := json.NewEncoder(w)
 	if err := enc.Encode(resp); err != nil {
 		slog.Warn("encode dashboard overview", "err", err)
-	}
-}
-
-func (s *Server) handleDashboardAccount(w http.ResponseWriter, r *http.Request) {
-	if s.usageDB == nil {
-		http.Error(w, "usage database is not configured", http.StatusServiceUnavailable)
-		return
-	}
-
-	accountKey := strings.TrimSpace(r.URL.Query().Get("account_key"))
-	if accountKey == "" {
-		http.Error(w, "missing account_key", http.StatusBadRequest)
-		return
-	}
-
-	daily, weekly, monthly, err := s.usageDB.AccountTrends(r.Context(), accountKey)
-	if err != nil {
-		slog.Warn("query account trends", "account", accountKey, "err", err)
-		http.Error(w, "query account trends", http.StatusInternalServerError)
-		return
-	}
-
-	quota := s.store.AccountQuotaSnapshots()[accountKey]
-	quota5h := int64(0)
-	quotaWeek := int64(0)
-	if quota.HasFiveHour {
-		quota5h = int64(math.Round(quota.FiveHourMax))
-	}
-	if quota.HasWeekly {
-		quotaWeek = int64(math.Round(quota.WeeklyMax))
-	}
-
-	resp := dashboardAccountResponse{
-		AccountKey:      accountKey,
-		Has5hQuota:      quota.HasFiveHour,
-		FiveHourResetAt: optionalTime(quota.FiveHourResetAt),
-		HasWeekQuota:    quota.HasWeekly,
-		WeeklyResetAt:   optionalTime(quota.WeeklyResetAt),
-		Quota5hTokens:   quota5h,
-		QuotaWeekTokens: quotaWeek,
-		Daily:           daily,
-		Weekly:          weekly,
-		Monthly:         monthly,
-	}
-	if !resp.Has5hQuota && resp.HasWeekQuota {
-		resp.Has5hQuota = true
-		resp.Quota5hTokens = resp.QuotaWeekTokens
-		resp.FiveHourResetAt = resp.WeeklyResetAt
-	}
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	enc := json.NewEncoder(w)
-	if err := enc.Encode(resp); err != nil {
-		slog.Warn("encode account dashboard", "account", accountKey, "err", err)
-	}
-}
-
-func (s *Server) handleDashboardAccountsDetails(w http.ResponseWriter, r *http.Request) {
-	if s.usageDB == nil {
-		http.Error(w, "usage database is not configured", http.StatusServiceUnavailable)
-		return
-	}
-
-	activeAccounts := s.activeAccountTokens()
-	accountKeys := make([]string, 0, len(activeAccounts))
-	for accountKey := range activeAccounts {
-		accountKeys = append(accountKeys, accountKey)
-	}
-	slices.Sort(accountKeys)
-
-	trendsByAccount, err := s.usageDB.AccountTrendsBatch(r.Context(), accountKeys)
-	if err != nil {
-		slog.Warn("query account trends batch", "err", err)
-		http.Error(w, "query account trends batch", http.StatusInternalServerError)
-		return
-	}
-
-	accounts := make([]dashboardAccountDetails, 0, len(accountKeys))
-	for _, accountKey := range accountKeys {
-		trends := trendsByAccount[accountKey]
-		accounts = append(accounts, dashboardAccountDetails{
-			AccountKey: accountKey,
-			Daily:      trends.Daily,
-			Weekly:     trends.Weekly,
-			Monthly:    trends.Monthly,
-		})
-	}
-
-	resp := dashboardAccountsDetailsResponse{Accounts: accounts}
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	enc := json.NewEncoder(w)
-	if err := enc.Encode(resp); err != nil {
-		slog.Warn("encode accounts dashboard", "err", err)
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"time"
 )
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path string, sessionID string) {
@@ -22,7 +21,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 	var retryResp *http.Response
 	var retryBody []byte
 	for attempt := range 2 {
-		token, sticky, err := s.store.SelectToken(sessionID, tried)
+		token, sticky, err := s.selectProxyToken(
+			r.Context(),
+			sessionID,
+			tried,
+			attempt,
+			"websocket token select",
+			"websocket token refresh failed",
+		)
 		if err != nil {
 			if retryResp != nil {
 				if err := writeResponse(w, retryResp, retryBody); err != nil {
@@ -33,21 +39,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 			http.Error(w, "no available tokens", http.StatusServiceUnavailable)
 			return
 		}
-		reason := "ranked"
-		if sticky {
-			reason = "sticky"
-		}
-		slog.Info("websocket token select", "token", token.ID, "reason", reason, "session", sessionID, "attempt", attempt+1)
-
-		refreshed, err := maybeRefreshTokenIfStale(r.Context(), s.store, token.ID, defaultProxyRefreshConfig())
-		if err != nil {
-			slog.Warn("websocket token refresh failed", "token", token.ID, "err", err)
-		}
-		if refreshed {
-			if updated, ok := s.store.TokenSnapshot(token.ID); ok {
-				token = updated
-			}
-		}
 
 		upstream, err := s.forwardWebSocketRequest(r, token, path)
 		if err != nil {
@@ -57,20 +48,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 		}
 
 		if upstream.resp.StatusCode == http.StatusUnauthorized {
-			refreshed, err := maybeRefreshToken(r.Context(), s.store, token.ID, defaultProxyRefreshConfig())
-			if err != nil {
-				if isPermanentRefreshError(err) {
-					slog.Warn("websocket token refresh permanently failed", "token", token.ID, "err", err)
-					s.store.MarkInvalid(token.ID)
-				} else {
-					slog.Warn("websocket token refresh failed", "token", token.ID, "err", err)
-					s.store.MarkCooldown(token.ID, time.Now().Add(defaultCooldownDuration))
-				}
-			}
-			if refreshed {
-				if updated, ok := s.store.TokenSnapshot(token.ID); ok {
-					token = updated
-				}
+			if s.refreshTokenAfterUnauthorized(r.Context(), &token, "websocket") {
 				upstream, err = s.forwardWebSocketRequest(r, token, path)
 				if err != nil {
 					slog.Warn("websocket upstream request", "token", token.ID, "session", sessionID, "err", err)
@@ -81,11 +59,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 		}
 
 		if upstream.resp.StatusCode == http.StatusUnauthorized {
-			tried[token.ID] = true
-			if sessionID != "" {
-				s.store.ClearSession(sessionID)
-			}
-			if attempt == 1 || !s.store.HasAvailableToken(tried) {
+			if !s.retryWithAlternateToken(token.ID, tried, attempt) {
 				if err := writeResponse(w, upstream.resp, upstream.body); err != nil {
 					slog.Warn("write websocket unauthorized response", "token", token.ID, "session", sessionID, "err", err)
 				}
@@ -104,13 +78,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 		}
 
 		if isLimitError(upstream.resp.StatusCode, upstream.body) {
-			tried[token.ID] = true
-			s.store.MarkCooldown(token.ID, time.Now().Add(defaultCooldownDuration))
-			slog.Info("token cooldown", "token", token.ID, "reason", "usage limit")
-			if sessionID != "" {
-				s.store.ClearSession(sessionID)
-			}
-			if attempt == 1 || !s.store.HasAvailableToken(tried) {
+			if !s.retryAfterUsageLimit(token.ID, tried, attempt) {
 				if err := writeResponse(w, upstream.resp, upstream.body); err != nil {
 					slog.Warn("write websocket limit response", "token", token.ID, "session", sessionID, "err", err)
 				}
@@ -128,14 +96,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 			return
 		}
 
-		if sessionID != "" && !sticky {
-			s.store.SetSession(sessionID, token.ID)
-			if prevTokenID != "" && prevTokenID != token.ID {
-				slog.Info("websocket session switched", "session", sessionID, "from", prevTokenID, "to", token.ID)
-			} else if prevTokenID == "" {
-				slog.Info("websocket session bound", "session", sessionID, "token", token.ID)
-			}
-		}
+		s.bindProxySession(sessionID, prevTokenID, token, sticky, "websocket")
 
 		usageCapture := newWebsocketUsageCapture(func(usage TokenUsage) {
 			s.recordTokenUsage(token, path, upstream.resp.StatusCode, true, usage)

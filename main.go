@@ -193,13 +193,9 @@ func newMux(server *Server) *http.ServeMux {
 	mux.HandleFunc("/stats/assets/", handleMethodNotAllowed)
 	mux.HandleFunc("/stats", handleMethodNotAllowed)
 	mux.HandleFunc("/stats/overview", handleMethodNotAllowed)
-	mux.HandleFunc("/stats/accounts/details", handleMethodNotAllowed)
-	mux.HandleFunc("/stats/account", handleMethodNotAllowed)
 	mux.HandleFunc("GET /stats/assets/", handleDashboardAsset)
 	mux.HandleFunc("GET /stats", server.handleDashboard)
 	mux.HandleFunc("GET /stats/overview", server.handleDashboardOverview)
-	mux.HandleFunc("GET /stats/accounts/details", server.handleDashboardAccountsDetails)
-	mux.HandleFunc("GET /stats/account", server.handleDashboardAccount)
 	mux.HandleFunc("/", server.handleProxy)
 	return mux
 }

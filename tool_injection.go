@@ -192,16 +192,6 @@ func appendMissingTools(tools []json.RawMessage, additions []responseToolInjecti
 	return tools, changed
 }
 
-func toolsContainType(tools []json.RawMessage, toolType string) bool {
-	for _, rawTool := range tools {
-		gotType, ok := responseToolType(rawTool)
-		if ok && gotType == toolType {
-			return true
-		}
-	}
-	return false
-}
-
 func responseToolType(rawTool json.RawMessage) (string, bool) {
 	var tool struct {
 		Type string `json:"type"`

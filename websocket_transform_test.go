@@ -6,6 +6,46 @@ import (
 	"testing"
 )
 
+func TestParseWebsocketFrameHeader(t *testing.T) {
+	tests := []struct {
+		name       string
+		payloadLen int
+		masked     bool
+	}{
+		{name: "short unmasked payload", payloadLen: 12},
+		{name: "length16 masked payload", payloadLen: 126, masked: true},
+		{name: "length64 masked payload", payloadLen: 66000, masked: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := buildProxyWebsocketFrame(proxyWebsocketFrame{
+				opcode:  websocketOpcodeText,
+				fin:     true,
+				payload: bytes.Repeat([]byte("x"), tt.payloadLen),
+			}, tt.masked)
+			if err != nil {
+				t.Fatalf("buildProxyWebsocketFrame() error = %v", err)
+			}
+
+			headerLen := websocketFrameHeaderLen(encoded[:2])
+			header, err := parseWebsocketFrameHeader(encoded[:headerLen])
+			if err != nil {
+				t.Fatalf("parseWebsocketFrameHeader() error = %v", err)
+			}
+			if int(header.payloadLen) != tt.payloadLen {
+				t.Fatalf("payloadLen = %d, want %d", header.payloadLen, tt.payloadLen)
+			}
+			if header.masked != tt.masked {
+				t.Fatalf("masked = %v, want %v", header.masked, tt.masked)
+			}
+			if header.first&0x0F != websocketOpcodeText {
+				t.Fatalf("opcode = %d, want text", header.first&0x0F)
+			}
+		})
+	}
+}
+
 func TestCopyWebsocketClientToUpstreamInjectsResponseTools(t *testing.T) {
 	tests := []struct {
 		name   string
