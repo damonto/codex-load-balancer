@@ -85,10 +85,10 @@
             Token Composition
           </h2>
           <label
-            class="control-surface flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-extrabold text-slate-600 shadow-sm">
+            class="control-surface flex h-9 w-full items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-extrabold text-slate-600 shadow-sm sm:w-auto">
             <span class="sr-only">Composition window</span>
             <select id="compositionSelect" x-model="compositionWindow"
-              class="app-text bg-transparent text-[#251a2d] outline-none">
+              class="app-text w-full bg-transparent text-[#251a2d] outline-none sm:w-auto">
               <template x-for="window in compositionWindows()" x-bind:key="window.key">
                 <option x-bind:value="window.key" x-text="window.label"></option>
               </template>
@@ -131,9 +131,9 @@
           x-text="'Accounts (' + filteredAccounts().length + ')'">Accounts</h2>
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
           <label
-            class="control-surface flex h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 shadow-sm">
+            class="control-surface flex h-11 w-full items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 shadow-sm sm:w-auto">
             <span class="whitespace-nowrap">Sort by:</span>
-            <select id="sortSelect" x-model="sort" class="app-text min-w-32 bg-transparent text-[#251a2d] outline-none">
+            <select id="sortSelect" x-model="sort" class="app-text min-w-0 flex-1 bg-transparent text-[#251a2d] outline-none sm:min-w-32 sm:flex-none">
               <option value="total">Total Usage</option>
               <option value="input">Input</option>
               <option value="output">Output</option>
