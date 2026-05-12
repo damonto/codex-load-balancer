@@ -4,253 +4,108 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Stats Dashboard</title>
+  <title>Token Usage</title>
   <link rel="stylesheet" href="stats/assets/tailwind.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js"></script>
+  <script defer src="stats/assets/app.js"></script>
 </head>
 
-<body class="min-h-screen bg-white text-[#2f2433] dark:bg-slate-950 dark:text-slate-200">
-  <div class="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8">
-    <header class="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-6">
-      <h1 class="text-2xl md:text-4xl font-extrabold tracking-tight">Token Usage</h1>
-      <div class="flex items-center gap-2">
+<body class="min-h-screen bg-[#fbfbfc] text-[#2f2433] antialiased">
+  <main class="mx-auto max-w-378 px-4 py-5 sm:px-6 lg:px-8">
+    <header class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex items-center">
+        <h1 class="text-[2rem] font-black leading-none tracking-normal text-[#251a2d] sm:text-[2.45rem]">Token Usage</h1>
+      </div>
+      <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <p id="meta" class="text-sm font-medium text-slate-500">Loading...</p>
         <button id="refreshBtn" type="button"
-          class="rounded-xl border border-rose-200 bg-rose-100 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200 px-4 py-2 text-sm font-semibold">Refresh</button>
-        <div id="meta" class="text-xs md:text-sm text-gray-500 dark:text-slate-400">Loading...</div>
+          class="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-rose-100 bg-rose-50 px-4 text-sm font-extrabold text-rose-600 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-70">
+          <span>Refresh</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true" class="size-4">
+            <path fill="currentColor"
+              d="M17.7 6.3A8 8 0 0 0 4 12h2a6 6 0 0 1 10.3-4.2L13 11h8V3l-3.3 3.3ZM6.3 17.7A8 8 0 0 0 20 12h-2a6 6 0 0 1-10.3 4.2L11 13H3v8l3.3-3.3Z" />
+          </svg>
+        </button>
       </div>
     </header>
 
-    <section id="periodCards" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-8"></section>
+    <section id="periodCards" class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"></section>
+
+    <section class="mb-6 grid grid-cols-1 gap-4 xl:grid-cols-[3fr_2fr]">
+      <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_18px_60px_rgba(15,23,42,0.06)]">
+        <div class="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <h2 class="text-xl font-black tracking-normal text-[#251a2d]">Usage Trend</h2>
+          <div id="trendTabs" class="flex items-center gap-2"></div>
+        </div>
+        <div class="relative h-72.5 min-h-72.5 w-full">
+          <canvas id="trendChart"></canvas>
+        </div>
+      </article>
+
+      <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_18px_60px_rgba(15,23,42,0.06)]">
+        <h2 class="mb-4 text-xl font-black tracking-normal text-[#251a2d]">Token Composition (Total)</h2>
+        <div class="grid gap-4 lg:grid-cols-[minmax(180px,0.8fr)_1fr] lg:items-center">
+          <div class="relative mx-auto h-72.5 w-full max-w-72.5">
+            <canvas id="compositionChart"></canvas>
+            <div id="compositionCenter"
+              class="pointer-events-none absolute inset-0 grid place-items-center text-center text-[#251a2d]"></div>
+          </div>
+          <div id="compositionLegend" class="grid gap-5"></div>
+        </div>
+      </article>
+    </section>
 
     <section>
-      <div class="flex items-center justify-between mb-3">
-        <h2 class="text-lg md:text-xl font-bold">Accounts</h2>
-        <span id="accountCount" class="text-xs md:text-sm text-gray-500 dark:text-slate-400"></span>
+      <div class="mb-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <h2 id="accountHeading" class="text-2xl font-black tracking-normal text-[#251a2d]">Accounts</h2>
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <label class="flex h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 shadow-sm">
+            <span class="whitespace-nowrap">Sort by:</span>
+            <select id="sortSelect"
+              class="min-w-32 bg-transparent text-[#251a2d] outline-none">
+              <option value="total">Total Usage</option>
+              <option value="input">Input</option>
+              <option value="output">Output</option>
+              <option value="cached">Cached</option>
+            </select>
+          </label>
+          <label class="relative block h-11 min-w-0 sm:w-70">
+            <svg viewBox="0 0 24 24" aria-hidden="true"
+              class="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-slate-400">
+              <path fill="currentColor"
+                d="m20.3 18.9-4.2-4.2a7 7 0 1 0-1.4 1.4l4.2 4.2 1.4-1.4ZM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0Z" />
+            </svg>
+            <input id="searchInput" type="search" placeholder="Search account"
+              class="h-full w-full rounded-lg border border-slate-200 bg-white pl-11 pr-4 text-sm font-semibold text-[#251a2d] shadow-sm outline-none transition placeholder:text-slate-400 focus:border-rose-300 focus:ring-4 focus:ring-rose-100" />
+          </label>
+        </div>
       </div>
-      <div id="accounts" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
+
+      <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_18px_60px_rgba(15,23,42,0.06)]">
+        <div class="overflow-x-auto">
+          <table class="min-w-280 w-full border-collapse">
+            <thead class="bg-slate-50/70 text-left text-[0.68rem] font-extrabold uppercase tracking-normal text-slate-500">
+              <tr class="border-b border-slate-200">
+                <th class="px-5 py-4">Account</th>
+                <th class="px-5 py-4">Usage Limit</th>
+                <th class="px-5 py-4">Input<br><span class="font-semibold normal-case text-slate-400">Total / Cached</span></th>
+                <th class="px-5 py-4">Output<br><span class="font-semibold normal-case text-slate-400">Total</span></th>
+                <th class="px-5 py-4">Total Usage</th>
+                <th class="px-5 py-4">Composition</th>
+              </tr>
+            </thead>
+            <tbody id="accountRows" class="divide-y divide-slate-200"></tbody>
+          </table>
+        </div>
+        <div id="accountsEmpty" class="hidden px-6 py-10 text-center text-sm font-semibold text-slate-500">No accounts.</div>
+        <footer class="border-t border-slate-200 px-5 py-4 text-xs font-semibold text-slate-500">
+          <span>Cached: Tokens served from cache</span>
+          <span class="mx-3 text-slate-300">|</span>
+          <span>Reasoning: Tokens used for reasoning</span>
+        </footer>
+      </div>
     </section>
-  </div>
-
-  <script>
-    var dashboardState = { payload: null, accounts: [] };
-
-    function esc(v) {
-      return String(v)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-    }
-
-    function num(v) {
-      var n = Number(v);
-      if (!isFinite(n)) return 0;
-      return n;
-    }
-
-    function fmt(v) {
-      var n = num(v);
-      if (n >= 1000000) {
-        var m = (n / 1000000).toFixed(1).replace(/\.0$/, '');
-        return m + 'M';
-      }
-      return new Intl.NumberFormat().format(n);
-    }
-
-    function pick() {
-      for (var i = 0; i < arguments.length; i++) {
-        var n = num(arguments[i]);
-        if (n !== 0 || arguments[i] === 0 || arguments[i] === '0') return n;
-      }
-      return 0;
-    }
-
-    function shortAccountKey(key) {
-      var value = String(key || '');
-      if (value.length <= 22) return value;
-      return value.slice(0, 10) + '…' + value.slice(-8);
-    }
-
-    function formatResetAt(value) {
-      if (!value) return '-';
-      var ts = new Date(value);
-      if (isNaN(ts.getTime())) return '-';
-      return ts.toLocaleString(undefined, {
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    }
-
-    function usagePct(used, limit) {
-      if (!limit || limit <= 0) return 0;
-      return Math.min(100, Math.max(0, (used / limit) * 100));
-    }
-
-    function quotaClass(p) {
-      if (p >= 100) return 'from-red-400 to-red-500';
-      if (p >= 80) return 'from-amber-400 to-amber-500';
-      return 'from-rose-400 to-rose-500';
-    }
-
-    function quotaPanel(title, hasQuota, used, limit, resetAt) {
-      var resetText = formatResetAt(resetAt);
-      if (!hasQuota || limit <= 0) {
-        return '' +
-          '<div class="grid gap-0.5">' +
-          '<div class="flex items-center gap-2 text-[11px] tracking-[0.05em] uppercase leading-tight text-gray-500 dark:text-slate-400">' +
-          '<span>' + esc(title) + '</span><span class="ml-auto normal-case tracking-normal text-right">Reset ' + esc(resetText) + '</span>' +
-          '</div>' +
-          '<div class="flex items-center gap-1.5">' +
-          '<div class="h-[7px] flex-1 rounded-full bg-rose-100 dark:bg-slate-700 overflow-hidden"></div>' +
-          '<span class="shrink-0 text-[11px] text-gray-500 dark:text-slate-400">-</span>' +
-          '</div>' +
-          '</div>';
-      }
-      var progress = usagePct(used, limit);
-      var fillCls = quotaClass(progress);
-      var pct = Math.round(progress);
-      return '' +
-        '<div class="grid gap-0.5">' +
-        '<div class="flex items-center gap-2 text-[11px] tracking-[0.05em] uppercase leading-tight text-gray-500 dark:text-slate-400">' +
-        '<span>' + esc(title) + '</span><span class="ml-auto normal-case tracking-normal text-right">Reset ' + esc(resetText) + '</span>' +
-        '</div>' +
-        '<div class="flex items-center gap-1.5">' +
-        '<div class="h-[7px] flex-1 rounded-full bg-rose-100 dark:bg-slate-700 overflow-hidden">' +
-        '<span class="block h-full w-0 bg-gradient-to-r transition-[width] duration-300 ease-out ' + fillCls + '" style="width:' + progress + '%"></span>' +
-        '</div>' +
-        '<span class="shrink-0 text-[11px] text-gray-500 dark:text-slate-400">' + pct + '%</span>' +
-        '</div>' +
-        '</div>';
-    }
-
-    /* ── period cards ── */
-    function tokenColumns(input, cached, output, reasoning, dark) {
-      var msCls = dark ? 'opacity-75' : 'text-gray-500 dark:text-slate-400';
-      var borderCls = dark ? 'border-white/20' : 'border-gray-100 dark:border-slate-700';
-      return '' +
-        '<div class="grid grid-cols-2 gap-x-4 pt-3 border-t ' + borderCls + '">' +
-        '<div>' +
-        '<div class="text-[10px] uppercase tracking-wider ' + msCls + '">Input</div>' +
-        '<div class="text-lg font-extrabold tabular-nums">' + fmt(input) + '</div>' +
-        '<div class="text-[11px] ' + msCls + '">Cached&nbsp;' + fmt(cached) + '</div>' +
-        '</div>' +
-        '<div>' +
-        '<div class="text-[10px] uppercase tracking-wider ' + msCls + '">Output</div>' +
-        '<div class="text-lg font-extrabold tabular-nums">' + fmt(output) + '</div>' +
-        '<div class="text-[11px] ' + msCls + '">Reasoning&nbsp;' + fmt(reasoning) + '</div>' +
-        '</div>' +
-        '</div>';
-    }
-
-    function periodCard(label, t, dark) {
-      t = t || {};
-      var msCls = dark ? 'opacity-75' : 'text-gray-500 dark:text-slate-400';
-      var inner =
-        '<div class="text-[11px] font-semibold tracking-widest uppercase ' + msCls + '">' + esc(label) + '</div>' +
-        '<div class="text-[38px] leading-none tracking-[-0.02em] font-black tabular-nums my-2">' + fmt(num(t.total_tokens)) + '</div>' +
-        tokenColumns(num(t.input_tokens), num(t.cached_tokens), num(t.output_tokens), num(t.reasoning_tokens), dark);
-
-      if (dark) {
-        return '<article class="bg-gradient-to-br from-rose-400 to-rose-500 text-rose-100 border border-white/20 rounded-[1.6rem] shadow-[0_8px_32px_rgba(244,63,94,0.32)] p-5 flex flex-col">' + inner + '</article>';
-      }
-      return '<article class="bg-white dark:bg-slate-900 border border-gray-100 dark:border-slate-700 rounded-[1.6rem] shadow-[0_2px_12px_rgba(0,0,0,0.07),_0_8px_32px_rgba(0,0,0,0.04)] dark:shadow-[0_10px_28px_rgba(0,0,0,0.35)] p-5 flex flex-col">' + inner + '</article>';
-    }
-
-    function renderPeriodCards(payload) {
-      var p = payload || {};
-      var html = '';
-      html += periodCard('Today', p.today);
-      html += periodCard('Last 7 Days', p.recent_7_days);
-      html += periodCard('Last 30 Days', p.recent_30_days);
-      html += periodCard('Total', p.total, true);
-      document.getElementById('periodCards').innerHTML = html;
-    }
-
-    /* ── account cards ── */
-    function renderAccounts(accounts) {
-      var root = document.getElementById('accounts');
-      var countEl = document.getElementById('accountCount');
-      countEl.textContent = (accounts ? accounts.length : 0) + ' accounts';
-
-      if (!accounts || !accounts.length) {
-        root.innerHTML = '<div class="bg-white dark:bg-slate-900 border border-gray-100 dark:border-slate-700 rounded-[1.6rem] shadow-[0_2px_12px_rgba(0,0,0,0.07),_0_8px_32px_rgba(0,0,0,0.04)] dark:shadow-[0_10px_28px_rgba(0,0,0,0.35)] p-8 text-center text-sm text-gray-500 dark:text-slate-400">No accounts.</div>';
-        return;
-      }
-
-      var chipCls = 'inline-block border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-200 rounded-[6px] text-[11px] leading-none px-[0.45rem] py-[0.3rem] max-w-full truncate';
-
-      var html = '';
-      for (var i = 0; i < accounts.length; i++) {
-        var a = accounts[i];
-        var key = a.account_key || '';
-        var displayName = a.email || shortAccountKey(key);
-
-        var used5 = pick(a.used_5h_tokens);
-        var max5 = pick(a.quota_5h_tokens);
-        var has5 = Boolean(a.has_5h_quota);
-        var usedW = pick(a.used_week_tokens);
-        var maxW = pick(a.quota_week_tokens);
-        var hasW = Boolean(a.has_week_quota);
-        var reset5 = a.five_hour_reset_at;
-        var resetW = a.weekly_reset_at;
-        if (!has5 && hasW) { has5 = true; used5 = usedW; max5 = maxW; }
-        if (!reset5 && resetW) reset5 = resetW;
-
-        var chips = '';
-        if (a.plan_type) chips += '<span class="' + chipCls + '">' + esc(a.plan_type) + '</span>';
-        if (a.token_ids && a.token_ids.length) {
-          chips += '<span class="' + chipCls + '">' + esc(a.token_ids[0]) + '</span>';
-          if (a.token_ids.length > 1) chips += '<span class="' + chipCls + '">+' + (a.token_ids.length - 1) + '</span>';
-        } else {
-          chips = '<span class="' + chipCls + '">No token id</span>';
-        }
-
-        html += '' +
-          '<article class="bg-white dark:bg-slate-900 border border-gray-100 dark:border-slate-700 rounded-[1.2rem] shadow-[0_2px_12px_rgba(0,0,0,0.07),_0_8px_32px_rgba(0,0,0,0.04)] dark:shadow-[0_10px_28px_rgba(0,0,0,0.35)] p-3 grid gap-2">' +
-          '<section class="grid grid-cols-1 md:grid-cols-2 gap-2">' +
-          '<section class="min-w-0 flex flex-col gap-1">' +
-          '<div class="min-w-0">' +
-          '<h3 class="text-lg font-bold break-all text-slate-900 dark:text-slate-200" title="' + esc(key) + '">' + esc(displayName) + '</h3>' +
-          '<div class="flex flex-wrap gap-[6px] mt-0.5">' + chips + '</div>' +
-          '</div>' +
-          '</section>' +
-          '<section class="min-w-0 grid gap-1">' +
-          quotaPanel('5h window', has5, used5, max5, reset5) +
-          quotaPanel('weekly window', hasW, usedW, maxW, resetW) +
-          '</section>' +
-          '</section>' +
-          '<section class="grid grid-cols-3 gap-1.5">' +
-          '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Input</div><div class="mt-0.5"><div class="text-xl font-extrabold tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.input_tokens) + '</div><div class="text-[11px] text-gray-500 dark:text-slate-400">Cached ' + fmt(a.cached_tokens) + '</div></div></div>' +
-          '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Output</div><div class="mt-0.5"><div class="text-xl font-extrabold tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.output_tokens) + '</div><div class="text-[11px] text-gray-500 dark:text-slate-400">Reasoning ' + fmt(a.reasoning_tokens) + '</div></div></div>' +
-          '<div><div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-slate-400">Total</div><div class="text-xl font-extrabold mt-0.5 tabular-nums text-slate-900 dark:text-slate-200">' + fmt(a.total_tokens) + '</div></div>' +
-          '</section>' +
-          '</article>';
-      }
-      root.innerHTML = html;
-    }
-
-    async function loadOverview() {
-      var meta = document.getElementById('meta');
-      meta.textContent = 'Loading...';
-      try {
-        var resp = await fetch('stats/overview');
-        if (!resp.ok) throw new Error(await resp.text());
-        var payload = await resp.json();
-        dashboardState.payload = payload;
-        dashboardState.accounts = payload.accounts || [];
-        renderPeriodCards(payload);
-        renderAccounts(dashboardState.accounts);
-        meta.textContent = 'Generated at ' + new Date(payload.generated_at).toLocaleString();
-      } catch (err) {
-        meta.textContent = 'Load failed: ' + err.message;
-      }
-    }
-
-    document.getElementById('refreshBtn').addEventListener('click', loadOverview);
-    loadOverview();
-  </script>
+  </main>
 </body>
 
 </html>

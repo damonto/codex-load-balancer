@@ -295,6 +295,7 @@ type GlobalPeriodTotals struct {
 	Daily        UsageTotals
 	Recent7Days  UsageTotals
 	Recent30Days UsageTotals
+	Recent90Days UsageTotals
 	Total        UsageTotals
 }
 
@@ -303,6 +304,7 @@ func (s *UsageDB) GlobalPeriodTotals(ctx context.Context) (GlobalPeriodTotals, e
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	sevenDayStart := now.AddDate(0, 0, -7)
 	thirtyDayStart := now.AddDate(0, 0, -30)
+	ninetyDayStart := now.AddDate(0, 0, -90)
 
 	var r GlobalPeriodTotals
 	err := s.db.QueryRowContext(ctx, `
@@ -322,22 +324,92 @@ SELECT
 	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN input_tokens ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN cached_tokens ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN output_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN reasoning_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN input_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN cached_tokens ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN output_tokens ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN created_at_unix >= ? THEN reasoning_tokens ELSE 0 END), 0)
 FROM usage_events
 	`,
 		dayStart.Unix(), dayStart.Unix(), dayStart.Unix(), dayStart.Unix(),
 		sevenDayStart.Unix(), sevenDayStart.Unix(), sevenDayStart.Unix(), sevenDayStart.Unix(),
 		thirtyDayStart.Unix(), thirtyDayStart.Unix(), thirtyDayStart.Unix(), thirtyDayStart.Unix(),
+		ninetyDayStart.Unix(), ninetyDayStart.Unix(), ninetyDayStart.Unix(), ninetyDayStart.Unix(),
 	).Scan(
 		&r.Total.InputTokens, &r.Total.CachedTokens, &r.Total.OutputTokens, &r.Total.ReasoningTokens,
 		&r.Daily.InputTokens, &r.Daily.CachedTokens, &r.Daily.OutputTokens, &r.Daily.ReasoningTokens,
 		&r.Recent7Days.InputTokens, &r.Recent7Days.CachedTokens, &r.Recent7Days.OutputTokens, &r.Recent7Days.ReasoningTokens,
 		&r.Recent30Days.InputTokens, &r.Recent30Days.CachedTokens, &r.Recent30Days.OutputTokens, &r.Recent30Days.ReasoningTokens,
+		&r.Recent90Days.InputTokens, &r.Recent90Days.CachedTokens, &r.Recent90Days.OutputTokens, &r.Recent90Days.ReasoningTokens,
 	)
 	if err != nil {
 		return GlobalPeriodTotals{}, fmt.Errorf("query global period totals: %w", err)
 	}
 	return r, nil
+}
+
+type UsageDailyBucket struct {
+	Date   time.Time
+	Totals UsageTotals
+}
+
+func (s *UsageDB) DailyUsageBuckets(ctx context.Context, days int) ([]UsageDailyBucket, error) {
+	if days <= 0 {
+		return nil, nil
+	}
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	start := today.AddDate(0, 0, -days+1)
+	end := today.AddDate(0, 0, 1)
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+	date(created_at_unix, 'unixepoch') AS usage_date,
+	COALESCE(SUM(input_tokens), 0),
+	COALESCE(SUM(cached_tokens), 0),
+	COALESCE(SUM(output_tokens), 0),
+	COALESCE(SUM(reasoning_tokens), 0)
+FROM usage_events
+WHERE created_at_unix >= ? AND created_at_unix < ?
+GROUP BY usage_date
+ORDER BY usage_date
+`, start.Unix(), end.Unix())
+	if err != nil {
+		return nil, fmt.Errorf("query daily usage buckets: %w", err)
+	}
+	defer rows.Close()
+
+	byDate := make(map[string]UsageTotals)
+	for rows.Next() {
+		var (
+			dateText string
+			totals   UsageTotals
+		)
+		if err := rows.Scan(
+			&dateText,
+			&totals.InputTokens,
+			&totals.CachedTokens,
+			&totals.OutputTokens,
+			&totals.ReasoningTokens,
+		); err != nil {
+			return nil, fmt.Errorf("scan daily usage bucket: %w", err)
+		}
+		byDate[dateText] = totals
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate daily usage buckets: %w", err)
+	}
+
+	buckets := make([]UsageDailyBucket, 0, days)
+	for day := start; day.Before(end); day = day.AddDate(0, 0, 1) {
+		dateText := day.Format(time.DateOnly)
+		buckets = append(buckets, UsageDailyBucket{
+			Date:   day,
+			Totals: byDate[dateText],
+		})
+	}
+	return buckets, nil
 }
 
 func (s *UsageDB) quotaOverrides(ctx context.Context) (map[string]AccountQuota, error) {

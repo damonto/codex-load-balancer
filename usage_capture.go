@@ -288,7 +288,7 @@ func (c *sseUsageCapture) LimitError() bool {
 	return c != nil && c.limitFound
 }
 
-func (c *sseUsageCapture) shouldInspectLimitPayload(payload []byte) bool {
+func (c *sseUsageCapture) shouldInspectLimitPayload(_ []byte) bool {
 	return bytes.Equal(c.currentEvent, sseResponseFailedEvent) ||
 		bytes.Equal(c.currentEvent, sseErrorEvent)
 }

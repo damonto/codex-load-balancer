@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -196,16 +197,113 @@ func TestHandleDashboardOverviewSeparatesSharedBusinessAccountMembers(t *testing
 	}
 }
 
-func TestDashboardPageDoesNotPrefetchAccountDetails(t *testing.T) {
+func TestHandleDashboardOverviewIncludesTrendAndComposition(t *testing.T) {
+	usageDB, err := openUsageDB(filepath.Join(t.TempDir(), "clb.db"))
+	if err != nil {
+		t.Fatalf("openUsageDB() error = %v", err)
+	}
+	defer usageDB.Close()
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	records := []UsageRecord{
+		{
+			AccountKey:      "user-expanded",
+			TokenID:         "expanded.json",
+			Path:            "/v1/responses",
+			StatusCode:      200,
+			InputTokens:     60,
+			CachedTokens:    30,
+			OutputTokens:    10,
+			ReasoningTokens: 4,
+			CreatedAt:       today.Add(3 * time.Hour),
+		},
+		{
+			AccountKey:      "user-expanded",
+			TokenID:         "expanded.json",
+			Path:            "/v1/responses",
+			StatusCode:      200,
+			InputTokens:     6,
+			CachedTokens:    3,
+			OutputTokens:    1,
+			ReasoningTokens: 1,
+			CreatedAt:       now.AddDate(0, 0, -45),
+		},
+	}
+	if err := usageDB.InsertUsageBatch(context.Background(), records); err != nil {
+		t.Fatalf("InsertUsageBatch() error = %v", err)
+	}
+
+	store := NewTokenStore()
+	store.UpsertToken(TokenState{
+		ID:     "expanded.json",
+		UserID: "user-expanded",
+		Email:  "expanded@example.com",
+	}, now)
+
+	server := &Server{
+		store:   store,
+		usageDB: usageDB,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/stats/overview", nil)
+	rr := httptest.NewRecorder()
+	server.handleDashboardOverview(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var resp dashboardOverviewResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if resp.Recent90Days.TotalTokens != 110 {
+		t.Fatalf("Recent90Days.TotalTokens = %d, want 110", resp.Recent90Days.TotalTokens)
+	}
+	if resp.Total.TotalTokens != 110 {
+		t.Fatalf("Total.TotalTokens = %d, want 110", resp.Total.TotalTokens)
+	}
+	if resp.Composition.CachedInput.Tokens != 33 || resp.Composition.Input.Tokens != 66 || resp.Composition.Output.Tokens != 11 {
+		t.Fatalf("Composition = %+v, want cached=33 input=66 output=11", resp.Composition)
+	}
+	if math.Abs(resp.Composition.CachedInput.Percent-30) > 0.01 {
+		t.Fatalf("cached percent = %f, want 30", resp.Composition.CachedInput.Percent)
+	}
+	if len(resp.Trend.Windows) != 3 {
+		t.Fatalf("trend window count = %d, want 3", len(resp.Trend.Windows))
+	}
+	for _, window := range resp.Trend.Windows {
+		if len(window.Buckets) != window.Days {
+			t.Fatalf("window %d bucket count = %d, want %d", window.Days, len(window.Buckets), window.Days)
+		}
+	}
+	if len(resp.Accounts) != 1 {
+		t.Fatalf("account count = %d, want 1", len(resp.Accounts))
+	}
+	account := resp.Accounts[0]
+	if account.Composition.CachedInput.Tokens != 33 || account.Composition.Input.Tokens != 66 || account.Composition.Output.Tokens != 11 {
+		t.Fatalf("account composition = %+v, want cached=33 input=66 output=11", account.Composition)
+	}
+}
+
+func TestDashboardCompositionFromTotalsHandlesZeroTotal(t *testing.T) {
+	got := compositionFromTotals(0, 0, 0)
+	if got.CachedInput.Percent != 0 || got.Input.Percent != 0 || got.Output.Percent != 0 {
+		t.Fatalf("composition percent = %+v, want all zero", got)
+	}
+}
+
+func TestDashboardPageAssets(t *testing.T) {
 	tests := []struct {
 		name        string
 		wantPresent []string
 		wantAbsent  []string
 	}{
 		{
-			name:        "dashboard page only fetches overview data on load",
-			wantPresent: []string{"fetch('stats/overview')"},
-			wantAbsent:  []string{"stats/account?account_key=", "stats/accounts/details", "detailsCache", "syncDetails("},
+			name:        "dashboard page loads cdn chart and app asset",
+			wantPresent: []string{"https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js", "stats/assets/app.js"},
+			wantAbsent:  []string{"stats/assets/chart.umd.min.js", "View all"},
 		},
 	}
 
@@ -231,6 +329,38 @@ func TestDashboardPageDoesNotPrefetchAccountDetails(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDashboardAppOnlyFetchesOverview(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/stats/assets/app.js", nil)
+	rr := httptest.NewRecorder()
+	newMux(&Server{}).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	body := rr.Body.String()
+	for _, want := range []string{"stats/overview", "display: true", `position: "top"`, `label: "Total"`, `label: "Input"`, `label: "Cached Input"`, `label: "Input (Non Cached)"`, `label: "Output"`, `label: "Reasoning"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard app missing %q", want)
+		}
+	}
+	for _, want := range []string{"stats/account?account_key=", "stats/accounts/details", "detailsCache", "syncDetails(", "viewAll", "showAll", "trendLegend", "toggleTrendLabel"} {
+		if strings.Contains(body, want) {
+			t.Fatalf("dashboard app unexpectedly contains %q", want)
+		}
+	}
+}
+
+func TestDashboardAssetsDoNotExposeNodeModules(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/stats/assets/node_modules/tailwindcss/package.json", nil)
+	rr := httptest.NewRecorder()
+	newMux(&Server{}).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusNotFound)
 	}
 }
 

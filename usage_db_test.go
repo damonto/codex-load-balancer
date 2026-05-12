@@ -15,6 +15,7 @@ func TestGlobalPeriodTotalsUsesRollingWindows(t *testing.T) {
 		wantDay    int64
 		want7Days  int64
 		want30Days int64
+		want90Days int64
 		wantTotal  int64
 	}{
 		{
@@ -72,6 +73,7 @@ func TestGlobalPeriodTotalsUsesRollingWindows(t *testing.T) {
 			wantDay:    15,
 			want7Days:  40,
 			want30Days: 81,
+			want90Days: 134,
 			wantTotal:  134,
 		},
 	}
@@ -104,10 +106,82 @@ func TestGlobalPeriodTotalsUsesRollingWindows(t *testing.T) {
 			if got.Recent30Days.TotalTokens() != tt.want30Days {
 				t.Fatalf("Recent30Days.TotalTokens() = %d, want %d", got.Recent30Days.TotalTokens(), tt.want30Days)
 			}
+			if got.Recent90Days.TotalTokens() != tt.want90Days {
+				t.Fatalf("Recent90Days.TotalTokens() = %d, want %d", got.Recent90Days.TotalTokens(), tt.want90Days)
+			}
 			if got.Total.TotalTokens() != tt.wantTotal {
 				t.Fatalf("Total.TotalTokens() = %d, want %d", got.Total.TotalTokens(), tt.wantTotal)
 			}
 		})
+	}
+}
+
+func TestDailyUsageBucketsFillsUTCDates(t *testing.T) {
+	usageDB, err := openUsageDB(filepath.Join(t.TempDir(), "clb.db"))
+	if err != nil {
+		t.Fatalf("openUsageDB() error = %v", err)
+	}
+	defer usageDB.Close()
+
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	records := []UsageRecord{
+		{
+			AccountKey:   "acct_1",
+			TokenID:      "today.json",
+			Path:         "/v1/responses",
+			StatusCode:   200,
+			InputTokens:  10,
+			CachedTokens: 2,
+			OutputTokens: 3,
+			CreatedAt:    today.Add(2 * time.Hour),
+		},
+		{
+			AccountKey:   "acct_1",
+			TokenID:      "two-days.json",
+			Path:         "/v1/responses",
+			StatusCode:   200,
+			InputTokens:  20,
+			CachedTokens: 4,
+			OutputTokens: 6,
+			CreatedAt:    today.AddDate(0, 0, -2).Add(23 * time.Hour),
+		},
+		{
+			AccountKey:   "acct_1",
+			TokenID:      "outside.json",
+			Path:         "/v1/responses",
+			StatusCode:   200,
+			InputTokens:  100,
+			CachedTokens: 100,
+			OutputTokens: 100,
+			CreatedAt:    today.AddDate(0, 0, -4),
+		},
+	}
+	if err := usageDB.InsertUsageBatch(context.Background(), records); err != nil {
+		t.Fatalf("InsertUsageBatch() error = %v", err)
+	}
+
+	got, err := usageDB.DailyUsageBuckets(context.Background(), 3)
+	if err != nil {
+		t.Fatalf("DailyUsageBuckets() error = %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("bucket count = %d, want 3", len(got))
+	}
+	for i, bucket := range got {
+		wantDate := today.AddDate(0, 0, -2+i)
+		if !bucket.Date.Equal(wantDate) {
+			t.Fatalf("bucket[%d].Date = %s, want %s", i, bucket.Date, wantDate)
+		}
+	}
+	if got[0].Totals.TotalTokens() != 30 {
+		t.Fatalf("oldest bucket total = %d, want 30", got[0].Totals.TotalTokens())
+	}
+	if got[1].Totals.TotalTokens() != 0 {
+		t.Fatalf("middle bucket total = %d, want 0", got[1].Totals.TotalTokens())
+	}
+	if got[2].Totals.TotalTokens() != 15 {
+		t.Fatalf("today bucket total = %d, want 15", got[2].Totals.TotalTokens())
 	}
 }
 
