@@ -7,7 +7,7 @@ import {
   num,
 } from "./format.js";
 import { planBorder, planFor, planSoft, planTrack } from "./plans.js";
-import { THEME_QUERY, themeColors } from "./theme.js";
+import { THEME_QUERY, themeColors, themeName } from "./theme.js";
 import {
   accountInitial,
   accountTokens,
@@ -31,6 +31,7 @@ export function dashboard() {
     trendChart: null,
     compositionChart: null,
     colors: themeColors(),
+    activeTheme: themeName(),
     meta: "Loading...",
     loading: false,
 
@@ -61,7 +62,7 @@ export function dashboard() {
         this.accounts = Array.isArray(this.payload.accounts)
           ? this.payload.accounts
           : [];
-        this.colors = themeColors();
+        this.syncTheme();
         this.meta = formatGeneratedAt(this.payload.generated_at);
         this.renderCharts();
       } catch (err) {
@@ -75,7 +76,7 @@ export function dashboard() {
       if (!THEME_QUERY) return;
       var component = this;
       var onThemeChange = function () {
-        component.colors = themeColors();
+        component.syncTheme();
         component.renderCharts();
       };
       if (THEME_QUERY.addEventListener) {
@@ -85,6 +86,11 @@ export function dashboard() {
       if (THEME_QUERY.addListener) {
         THEME_QUERY.addListener(onThemeChange);
       }
+    },
+
+    syncTheme: function () {
+      this.colors = themeColors();
+      this.activeTheme = themeName();
     },
 
     periodCards: function () {
@@ -290,11 +296,11 @@ export function dashboard() {
       var plan = planFor(account, index);
       return (
         "background:" +
-        planSoft(plan) +
+        planSoft(plan, this.activeTheme) +
         ";color:" +
         plan.color +
         ";border:1px solid " +
-        planBorder(plan)
+        planBorder(plan, this.activeTheme)
       );
     },
 
@@ -302,11 +308,11 @@ export function dashboard() {
       var plan = planFor(account, index);
       return (
         "background:" +
-        planSoft(plan) +
+        planSoft(plan, this.activeTheme) +
         ";color:" +
         plan.color +
         ";border:1px solid " +
-        planBorder(plan)
+        planBorder(plan, this.activeTheme)
       );
     },
 
@@ -318,7 +324,10 @@ export function dashboard() {
     accountSummaryStyle: function (account, index) {
       var plan = planFor(account, index);
       return (
-        "background:" + planSoft(plan) + ";border-color:" + planBorder(plan)
+        "background:" +
+        planSoft(plan, this.activeTheme) +
+        ";border-color:" +
+        planBorder(plan, this.activeTheme)
       );
     },
 
@@ -360,7 +369,7 @@ export function dashboard() {
     },
 
     quotaTrackStyle: function (account, index) {
-      return "background:" + planTrack(planFor(account, index));
+      return "background:" + planTrack(planFor(account, index), this.activeTheme);
     },
 
     quotaFillStyle: function (account, index, quota) {

@@ -352,7 +352,7 @@ func TestDashboardAppOnlyFetchesOverview(t *testing.T) {
 		},
 		{
 			path: "/stats/assets/app/dashboard.js",
-			want: []string{"stats/overview", "$watch", "Last 30 days"},
+			want: []string{"stats/overview", "$watch", "Last 30 days", "activeTheme", "syncTheme"},
 		},
 		{
 			path: "/stats/assets/app/charts.js",
@@ -373,6 +373,7 @@ func TestDashboardAppOnlyFetchesOverview(t *testing.T) {
 				`go: {`,
 				`label: "go"`,
 				`icon: "stats/assets/plan-icons/go.png"`,
+				`function isDarkTheme(theme)`,
 			},
 		},
 	}

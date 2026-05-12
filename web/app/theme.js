@@ -50,6 +50,10 @@ export function isDarkMode() {
   return Boolean(THEME_QUERY && THEME_QUERY.matches);
 }
 
+export function themeName() {
+  return isDarkMode() ? "dark" : "light";
+}
+
 export function themeColors() {
   return isDarkMode() ? DARK_COLORS : LIGHT_COLORS;
 }

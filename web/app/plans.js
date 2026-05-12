@@ -97,14 +97,18 @@ export function planFor(account, index) {
   };
 }
 
-export function planSoft(plan) {
-  return isDarkMode() && plan.darkSoft ? plan.darkSoft : plan.soft;
+function isDarkTheme(theme) {
+  return theme ? theme === "dark" : isDarkMode();
 }
 
-export function planBorder(plan) {
-  return isDarkMode() && plan.darkBorder ? plan.darkBorder : plan.border;
+export function planSoft(plan, theme) {
+  return isDarkTheme(theme) && plan.darkSoft ? plan.darkSoft : plan.soft;
 }
 
-export function planTrack(plan) {
-  return isDarkMode() && plan.darkTrack ? plan.darkTrack : plan.track;
+export function planBorder(plan, theme) {
+  return isDarkTheme(theme) && plan.darkBorder ? plan.darkBorder : plan.border;
+}
+
+export function planTrack(plan, theme) {
+  return isDarkTheme(theme) && plan.darkTrack ? plan.darkTrack : plan.track;
 }
