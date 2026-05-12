@@ -38,6 +38,8 @@ type dashboardTotals struct {
 
 type dashboardAccount struct {
 	AccountKey      string     `json:"account_key"`
+	UserID          string     `json:"user_id"`
+	AccountID       string     `json:"account_id"`
 	Email           string     `json:"email"`
 	PlanType        string     `json:"plan_type"`
 	TokenIDs        []string   `json:"token_ids"`
@@ -116,6 +118,8 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 		info := accountInfos[summary.AccountKey]
 		account := dashboardAccount{
 			AccountKey:      summary.AccountKey,
+			UserID:          info.UserID,
+			AccountID:       info.AccountID,
 			Email:           info.Email,
 			PlanType:        info.PlanType,
 			TokenIDs:        summary.ActiveTokenIDs,

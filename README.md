@@ -73,7 +73,7 @@ Notes:
 
 ## Token File Format
 
-Codex load balancer stores Codex credential JSON. The proxy reads `.tokens.access_token`, `.tokens.account_id`, `.tokens.refresh_token`, and `.last_refresh` from each `*.json` file.
+Codex load balancer stores Codex credential JSON. The proxy reads `.tokens.access_token`, `.tokens.account_id`, `.tokens.refresh_token`, optional `.tokens.id_token`, and `.last_refresh` from each `*.json` file. If `id_token` is present, its unsigned JWT claims are used only as a local hint for `user_id` and `email`; upstream requests still use `.tokens.account_id` for `ChatGPT-Account-ID`.
 
 Example:
 
@@ -123,7 +123,8 @@ If the upstream responds with status `429`, returns a Codex `usage_limit_reached
 
 - Syncs at startup and every 5 minutes.
 - Uses `https://chatgpt.com/backend-api/wham/usage`.
-- Account metadata shown in the dashboard, including `email` and `plan_type`, comes from the usage response in real time.
+- Account metadata shown in the dashboard, including `user_id`, `account_id`, `email`, and `plan_type`, comes from the usage response in real time.
+- Per-account usage is grouped by a local identity key: `user_id`, then `account_id`. This keeps Business Team members separate when upstream returns the same `account_id`.
 - Before proxying or syncing usage, Codex load balancer refreshes stale access tokens from the stored refresh token.
 - On `401`, Codex load balancer refreshes once and retries. If the token still stays unauthorized during usage sync, it removes the credential file and evicts the token from memory.
 
@@ -144,7 +145,7 @@ Dashboard data:
 
 - Overview cards: `today`, `recent_7_days`, `recent_30_days`, `total` with `input_tokens`, `cached_tokens`, `output_tokens`, `reasoning_tokens`.
 - Current dashboard page load uses only `/stats/overview`.
-- Account table: `email`, `plan_type`, totals, and 5-hour / weekly quota usage from usage sync (`/backend-api/wham/usage`).
+- Account table: `account_key`, `user_id`, `account_id`, `email`, `plan_type`, totals, and 5-hour / weekly quota usage from usage sync (`/backend-api/wham/usage`).
 
 ## Logs
 

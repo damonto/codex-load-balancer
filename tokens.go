@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ type authFile struct {
 type tokenFields struct {
 	AccessToken  string `json:"access_token"`
 	AccountID    string `json:"account_id"`
+	IDToken      string `json:"id_token"`
 	RefreshToken string `json:"refresh_token"`
 }
 
@@ -57,7 +59,7 @@ func loadTokensFromDirChanged(store *TokenStore, dir string) (bool, error) {
 			continue
 		}
 
-		token, accountID, refreshToken, lastRefresh, err := parseAuthFile(path)
+		token, userID, accountID, email, refreshToken, lastRefresh, err := parseAuthFile(path)
 		if err != nil {
 			_, removed := store.RemoveToken(entry.Name())
 			store.NoteFileMod(path, info.ModTime())
@@ -68,7 +70,9 @@ func loadTokensFromDirChanged(store *TokenStore, dir string) (bool, error) {
 			ID:           entry.Name(),
 			Path:         path,
 			Token:        token,
+			UserID:       userID,
 			AccountID:    accountID,
+			Email:        email,
 			RefreshToken: refreshToken,
 			LastRefresh:  lastRefresh,
 		}
@@ -90,21 +94,43 @@ func loadTokensFromDirChanged(store *TokenStore, dir string) (bool, error) {
 	return added > 0 || updated > 0, nil
 }
 
-func parseAuthFile(path string) (token, accountID, refreshToken string, lastRefresh time.Time, err error) {
+func parseAuthFile(path string) (token, userID, accountID, email, refreshToken string, lastRefresh time.Time, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", "", "", time.Time{}, fmt.Errorf("read auth file: %w", err)
+		return "", "", "", "", "", time.Time{}, fmt.Errorf("read auth file: %w", err)
 	}
 
 	var payload authFile
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return "", "", "", time.Time{}, fmt.Errorf("decode auth file: %w", err)
+		return "", "", "", "", "", time.Time{}, fmt.Errorf("decode auth file: %w", err)
 	}
 
 	if payload.Tokens != nil && payload.Tokens.AccessToken != "" {
-		return payload.Tokens.AccessToken, payload.Tokens.AccountID, payload.Tokens.RefreshToken, parseLastRefresh(payload.LastRefresh), nil
+		userID, email := parseIDTokenIdentity(payload.Tokens.IDToken)
+		return payload.Tokens.AccessToken, userID, payload.Tokens.AccountID, email, payload.Tokens.RefreshToken, parseLastRefresh(payload.LastRefresh), nil
 	}
-	return "", "", "", time.Time{}, errors.New("auth file missing access token")
+	return "", "", "", "", "", time.Time{}, errors.New("auth file missing access token")
+}
+
+func parseIDTokenIdentity(idToken string) (userID string, email string) {
+	parts := strings.Split(idToken, ".")
+	if len(parts) < 2 {
+		return "", ""
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", ""
+	}
+
+	var claims struct {
+		Subject string `json:"sub"`
+		Email   string `json:"email"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", ""
+	}
+	return strings.TrimSpace(claims.Subject), strings.TrimSpace(claims.Email)
 }
 
 func parseLastRefresh(raw *string) time.Time {
@@ -122,18 +148,18 @@ func parseLastRefresh(raw *string) time.Time {
 	return time.Time{}
 }
 
-func reloadTokensAndSyncUsage(ctx context.Context, store *TokenStore, dir string, usageURL string, syncOpts usageSyncOptions) error {
+func reloadTokensAndSyncUsage(ctx context.Context, store *TokenStore, usageDB *UsageDB, dir string, usageURL string, syncOpts usageSyncOptions) error {
 	changed, err := loadTokensFromDirChanged(store, dir)
 	if err != nil {
 		return err
 	}
 	if changed {
-		syncUsageNow(ctx, store, usageURL, syncOpts)
+		syncUsageNow(ctx, store, usageDB, usageURL, syncOpts)
 	}
 	return nil
 }
 
-func runTokenWatcher(ctx context.Context, store *TokenStore, dir string, usageURL string, syncOpts usageSyncOptions) {
+func runTokenWatcher(ctx context.Context, store *TokenStore, usageDB *UsageDB, dir string, usageURL string, syncOpts usageSyncOptions) {
 	ticker := time.NewTicker(defaultTokenWatchInterval)
 	defer ticker.Stop()
 
@@ -142,7 +168,7 @@ func runTokenWatcher(ctx context.Context, store *TokenStore, dir string, usageUR
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := reloadTokensAndSyncUsage(ctx, store, dir, usageURL, syncOpts); err != nil {
+			if err := reloadTokensAndSyncUsage(ctx, store, usageDB, dir, usageURL, syncOpts); err != nil {
 				slog.Warn("token scan", "err", err)
 			}
 		}

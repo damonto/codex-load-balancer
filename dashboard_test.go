@@ -116,6 +116,86 @@ func TestHandleDashboardOverviewFiltersAccountsWithoutActiveTokens(t *testing.T)
 	}
 }
 
+func TestHandleDashboardOverviewSeparatesSharedBusinessAccountMembers(t *testing.T) {
+	usageDB, err := openUsageDB(filepath.Join(t.TempDir(), "clb.db"))
+	if err != nil {
+		t.Fatalf("openUsageDB() error = %v", err)
+	}
+	defer usageDB.Close()
+
+	records := []UsageRecord{
+		{
+			AccountKey:  "user-a",
+			TokenID:     "a.json",
+			Path:        "/v1/responses",
+			StatusCode:  200,
+			InputTokens: 10,
+			CreatedAt:   time.Now().UTC(),
+		},
+		{
+			AccountKey:  "user-b",
+			TokenID:     "b.json",
+			Path:        "/v1/responses",
+			StatusCode:  200,
+			InputTokens: 20,
+			CreatedAt:   time.Now().UTC(),
+		},
+	}
+	if err := usageDB.InsertUsageBatch(context.Background(), records); err != nil {
+		t.Fatalf("InsertUsageBatch() error = %v", err)
+	}
+
+	store := NewTokenStore()
+	modTime := time.Now().UTC()
+	store.UpsertToken(TokenState{
+		ID:        "a.json",
+		UserID:    "user-a",
+		AccountID: "shared-account",
+		Email:     "a@example.com",
+	}, modTime)
+	store.UpsertToken(TokenState{
+		ID:        "b.json",
+		UserID:    "user-b",
+		AccountID: "shared-account",
+		Email:     "b@example.com",
+	}, modTime)
+
+	server := &Server{
+		store:   store,
+		usageDB: usageDB,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/stats/overview", nil)
+	rr := httptest.NewRecorder()
+	server.handleDashboardOverview(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	var resp dashboardOverviewResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	accounts := make(map[string]dashboardAccount, len(resp.Accounts))
+	for _, account := range resp.Accounts {
+		accounts[account.AccountKey] = account
+	}
+	for _, userID := range []string{"user-a", "user-b"} {
+		account, ok := accounts[userID]
+		if !ok {
+			t.Fatalf("account %q missing from response: %+v", userID, resp.Accounts)
+		}
+		if account.UserID != userID {
+			t.Fatalf("UserID for %q = %q, want %q", userID, account.UserID, userID)
+		}
+		if account.AccountID != "shared-account" {
+			t.Fatalf("AccountID for %q = %q, want shared-account", userID, account.AccountID)
+		}
+	}
+}
+
 func TestDashboardPageDoesNotPrefetchAccountDetails(t *testing.T) {
 	tests := []struct {
 		name        string

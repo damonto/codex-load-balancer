@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -119,6 +120,63 @@ func TestLoadTokensFromDirIgnoresSessionMetadata(t *testing.T) {
 	}
 }
 
+func TestLoadTokensFromDirParsesIDTokenIdentity(t *testing.T) {
+	store := NewTokenStore()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "active.json")
+	idToken := unsignedIDTokenForTest(t, map[string]string{
+		"sub":   "user-1",
+		"email": "member@example.com",
+	})
+	payload := map[string]any{
+		"tokens": map[string]string{
+			"access_token": "access-token",
+			"account_id":   "shared-account",
+			"id_token":     idToken,
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal token file: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	if err := loadTokensFromDir(store, dir); err != nil {
+		t.Fatalf("loadTokensFromDir() error = %v", err)
+	}
+
+	token, ok := store.TokenSnapshot("active.json")
+	if !ok {
+		t.Fatal("token should be loaded")
+	}
+	if token.UserID != "user-1" {
+		t.Fatalf("UserID = %q, want user-1", token.UserID)
+	}
+	if token.Email != "member@example.com" {
+		t.Fatalf("Email = %q, want member@example.com", token.Email)
+	}
+	if token.AccountID != "shared-account" {
+		t.Fatalf("AccountID = %q, want shared-account", token.AccountID)
+	}
+}
+
+func unsignedIDTokenForTest(t *testing.T, claims map[string]string) string {
+	t.Helper()
+
+	header, err := json.Marshal(map[string]string{"alg": "none"})
+	if err != nil {
+		t.Fatalf("marshal header: %v", err)
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("marshal claims: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(header) + "." +
+		base64.RawURLEncoding.EncodeToString(payload) + "."
+}
+
 func TestReloadTokensAndSyncUsageSyncsAddedOrUpdatedTokens(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -175,7 +233,7 @@ func TestReloadTokensAndSyncUsageSyncsAddedOrUpdatedTokens(t *testing.T) {
 				}
 			}))
 
-			if err := reloadTokensAndSyncUsage(context.Background(), store, dir, ts.URL, usageSyncOptions{Concurrency: 1}); err != nil {
+			if err := reloadTokensAndSyncUsage(context.Background(), store, nil, dir, ts.URL, usageSyncOptions{Concurrency: 1}); err != nil {
 				t.Fatalf("reloadTokensAndSyncUsage() error = %v", err)
 			}
 
@@ -281,6 +339,7 @@ func TestTokenStoreUpsertTokenPreservesUsageMetadataOnReload(t *testing.T) {
 	tests := []struct {
 		name          string
 		reloadToken   TokenState
+		wantUserID    string
 		wantAccountID string
 		wantEmail     string
 		wantPlanType  string
@@ -292,6 +351,7 @@ func TestTokenStoreUpsertTokenPreservesUsageMetadataOnReload(t *testing.T) {
 				Path:  "/tmp/active.json",
 				Token: "new-token",
 			},
+			wantUserID:    "user-usage",
 			wantAccountID: "account-usage",
 			wantEmail:     "usage@example.com",
 			wantPlanType:  "plus",
@@ -304,6 +364,7 @@ func TestTokenStoreUpsertTokenPreservesUsageMetadataOnReload(t *testing.T) {
 				Token:     "new-token",
 				AccountID: "account-file",
 			},
+			wantUserID:    "user-usage",
 			wantAccountID: "account-file",
 			wantEmail:     "usage@example.com",
 			wantPlanType:  "plus",
@@ -317,6 +378,7 @@ func TestTokenStoreUpsertTokenPreservesUsageMetadataOnReload(t *testing.T) {
 				ID:        "active.json",
 				Path:      "/tmp/active.json",
 				Token:     "old-token",
+				UserID:    "user-usage",
 				AccountID: "account-usage",
 				Email:     "usage@example.com",
 				PlanType:  "plus",
@@ -330,6 +392,9 @@ func TestTokenStoreUpsertTokenPreservesUsageMetadataOnReload(t *testing.T) {
 			}
 			if token.AccountID != tt.wantAccountID {
 				t.Fatalf("AccountID = %q, want %q", token.AccountID, tt.wantAccountID)
+			}
+			if token.UserID != tt.wantUserID {
+				t.Fatalf("UserID = %q, want %q", token.UserID, tt.wantUserID)
 			}
 			if token.Email != tt.wantEmail {
 				t.Fatalf("Email = %q, want %q", token.Email, tt.wantEmail)

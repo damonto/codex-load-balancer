@@ -32,6 +32,7 @@ type TokenState struct {
 	ID            string
 	Path          string
 	Token         string
+	UserID        string
 	AccountID     string
 	Email         string
 	PlanType      string
@@ -107,6 +108,9 @@ func (s *TokenStore) UpsertToken(token TokenState, modTime time.Time) (added boo
 	}
 
 	existing.Token = token.Token
+	if token.UserID != "" {
+		existing.UserID = token.UserID
+	}
 	if token.AccountID != "" {
 		existing.AccountID = token.AccountID
 	}
@@ -157,6 +161,7 @@ func (s *TokenStore) UpdateUsage(id string, fiveHour WindowUsage, weekly WindowU
 }
 
 type usageAccountMetadata struct {
+	UserID    string
 	AccountID string
 	Email     string
 	PlanType  string
@@ -166,6 +171,9 @@ func (s *TokenStore) UpdateUsageAccountMetadata(id string, metadata usageAccount
 	s.mu.Lock()
 	token, ok := s.tokens[id]
 	if ok {
+		if metadata.UserID != "" {
+			token.UserID = metadata.UserID
+		}
 		if token.AccountID == "" && metadata.AccountID != "" {
 			token.AccountID = metadata.AccountID
 		}
@@ -277,6 +285,7 @@ func (s *TokenStore) TokenRefs() []TokenRef {
 		refs = append(refs, TokenRef{
 			ID:        token.ID,
 			Token:     token.Token,
+			UserID:    token.UserID,
 			AccountID: token.AccountID,
 		})
 	}
@@ -410,8 +419,10 @@ func betterTokenCandidate(candidate TokenCandidate, current TokenCandidate) bool
 }
 
 type AccountInfo struct {
-	Email    string
-	PlanType string
+	UserID    string
+	AccountID string
+	Email     string
+	PlanType  string
 }
 
 func (s *TokenStore) ValidAccountCount() int {
@@ -442,9 +453,20 @@ func (s *TokenStore) AccountInfos() map[string]AccountInfo {
 		if key == "" {
 			continue
 		}
-		if _, ok := result[key]; !ok {
-			result[key] = AccountInfo{Email: token.Email, PlanType: token.PlanType}
+		info := result[key]
+		if info.UserID == "" {
+			info.UserID = token.UserID
 		}
+		if info.AccountID == "" {
+			info.AccountID = token.AccountID
+		}
+		if info.Email == "" {
+			info.Email = token.Email
+		}
+		if info.PlanType == "" {
+			info.PlanType = token.PlanType
+		}
+		result[key] = info
 	}
 	s.mu.RUnlock()
 	return result
@@ -453,6 +475,7 @@ func (s *TokenStore) AccountInfos() map[string]AccountInfo {
 type TokenRef struct {
 	ID        string
 	Token     string
+	UserID    string
 	AccountID string
 }
 

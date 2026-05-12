@@ -16,11 +16,11 @@ type usageSyncOptions struct {
 	Concurrency int
 }
 
-func syncUsageNow(ctx context.Context, store *TokenStore, usageURL string, syncOpts usageSyncOptions) {
-	syncUsageOnce(ctx, store, newUsageSyncClient(), usageURL, syncOpts)
+func syncUsageNow(ctx context.Context, store *TokenStore, usageDB *UsageDB, usageURL string, syncOpts usageSyncOptions) {
+	syncUsageOnce(ctx, store, usageDB, newUsageSyncClient(), usageURL, syncOpts)
 }
 
-func runUsageSyncer(ctx context.Context, store *TokenStore, usageURL string, syncOpts usageSyncOptions) {
+func runUsageSyncer(ctx context.Context, store *TokenStore, usageDB *UsageDB, usageURL string, syncOpts usageSyncOptions) {
 	if syncOpts.Interval <= 0 {
 		slog.Error("usage sync disabled", "reason", "interval must be positive")
 		return
@@ -38,7 +38,7 @@ func runUsageSyncer(ctx context.Context, store *TokenStore, usageURL string, syn
 			return
 		case <-ticker.C:
 		}
-		syncUsageOnce(ctx, store, client, usageURL, syncOpts)
+		syncUsageOnce(ctx, store, usageDB, client, usageURL, syncOpts)
 	}
 }
 
@@ -46,7 +46,7 @@ func newUsageSyncClient() *http.Client {
 	return &http.Client{Timeout: 15 * time.Second}
 }
 
-func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, usageURL string, syncOpts usageSyncOptions) {
+func syncUsageOnce(ctx context.Context, store *TokenStore, usageDB *UsageDB, client *http.Client, usageURL string, syncOpts usageSyncOptions) {
 	if syncOpts.Concurrency <= 0 {
 		slog.Error("usage sync skipped", "reason", "concurrency must be positive")
 		return
@@ -68,7 +68,7 @@ func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, 
 		go func(ref TokenRef) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if syncOneToken(ctx, store, client, usageURL, ref) {
+			if syncOneToken(ctx, store, usageDB, client, usageURL, ref) {
 				removedCount.Add(1)
 			}
 		}(ref)
@@ -83,7 +83,7 @@ func syncUsageOnce(ctx context.Context, store *TokenStore, client *http.Client, 
 	slog.Warn("usage sync removed tokens", "removed", n)
 }
 
-func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, usageURL string, ref TokenRef) bool {
+func syncOneToken(ctx context.Context, store *TokenStore, usageDB *UsageDB, client *http.Client, usageURL string, ref TokenRef) bool {
 	refreshed, refreshErr := maybeRefreshTokenIfStale(ctx, store, ref.ID, defaultProxyRefreshConfig())
 	if refreshErr != nil {
 		slog.Warn("token refresh failed during usage sync", "token", ref.ID, "err", refreshErr)
@@ -91,6 +91,7 @@ func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, u
 	if refreshed {
 		if token, ok := store.TokenSnapshot(ref.ID); ok {
 			ref.Token = token.Token
+			ref.UserID = token.UserID
 			ref.AccountID = token.AccountID
 		}
 	}
@@ -103,6 +104,7 @@ func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, u
 		} else if forced {
 			if token, ok := store.TokenSnapshot(ref.ID); ok {
 				ref.Token = token.Token
+				ref.UserID = token.UserID
 				ref.AccountID = token.AccountID
 			}
 			snapshot, err = fetchUsage(ctx, client, usageURL, ref)
@@ -120,11 +122,30 @@ func syncOneToken(ctx context.Context, store *TokenStore, client *http.Client, u
 	}
 	store.UpdateUsage(ref.ID, snapshot.FiveHour, snapshot.Weekly, time.Now())
 	store.UpdateUsageAccountMetadata(ref.ID, usageAccountMetadata{
+		UserID:    snapshot.UserID,
 		AccountID: snapshot.AccountID,
 		Email:     snapshot.Email,
 		PlanType:  snapshot.PlanType,
 	})
+	rekeyUsageForToken(ctx, store, usageDB, ref.ID)
 	return false
+}
+
+func rekeyUsageForToken(ctx context.Context, store *TokenStore, usageDB *UsageDB, tokenID string) {
+	if usageDB == nil {
+		return
+	}
+	token, ok := store.TokenSnapshot(tokenID)
+	if !ok {
+		return
+	}
+	accountKey := accountKeyFromToken(token)
+	if accountKey == "" {
+		return
+	}
+	if err := usageDB.RekeyTokenUsage(ctx, tokenID, accountKey); err != nil {
+		slog.Warn("rekey token usage", "token", tokenID, "account", accountKey, "err", err)
+	}
 }
 
 func removeTokenAndFile(store *TokenStore, tokenID string, reason string) bool {

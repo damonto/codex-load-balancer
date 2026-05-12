@@ -83,3 +83,37 @@ func TestSelectBestCandidateRanksByBottleneckThenWindows(t *testing.T) {
 		})
 	}
 }
+
+func TestAccountKeyFromTokenPrefersMemberIdentity(t *testing.T) {
+	tests := []struct {
+		name  string
+		token TokenState
+		want  string
+	}{
+		{
+			name: "uses user id first",
+			token: TokenState{
+				UserID:    "user-1",
+				Email:     "member@example.com",
+				AccountID: "shared-account",
+			},
+			want: "user-1",
+		},
+		{
+			name: "falls back to account id when email is present",
+			token: TokenState{
+				Email:     "member@example.com",
+				AccountID: "shared-account",
+			},
+			want: "shared-account",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := accountKeyFromToken(tt.token); got != tt.want {
+				t.Fatalf("accountKeyFromToken() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

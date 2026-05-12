@@ -191,6 +191,26 @@ SELECT COALESCE(SUM(reasoning_tokens), 0) FROM usage_events
 	}
 }
 
+func TestOpenUsageDBCreatesRekeyIndex(t *testing.T) {
+	usageDB, err := openUsageDB(filepath.Join(t.TempDir(), "clb.db"))
+	if err != nil {
+		t.Fatalf("openUsageDB() error = %v", err)
+	}
+	defer usageDB.Close()
+
+	var got int
+	if err := usageDB.db.QueryRowContext(context.Background(), `
+SELECT COUNT(*)
+FROM sqlite_master
+WHERE type = 'index' AND name = 'idx_usage_events_token_account'
+`).Scan(&got); err != nil {
+		t.Fatalf("query rekey index: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("rekey index count = %d, want 1", got)
+	}
+}
+
 func TestInsertUsageBatch(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -247,5 +267,79 @@ func TestInsertUsageBatch(t *testing.T) {
 				t.Fatalf("usage event count = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRekeyTokenUsage(t *testing.T) {
+	usageDB, err := openUsageDB(filepath.Join(t.TempDir(), "clb.db"))
+	if err != nil {
+		t.Fatalf("openUsageDB() error = %v", err)
+	}
+	defer usageDB.Close()
+
+	records := []UsageRecord{
+		{
+			AccountKey:  "shared-account",
+			TokenID:     "a.json",
+			Path:        "/v1/responses",
+			StatusCode:  200,
+			InputTokens: 10,
+			CreatedAt:   time.Unix(1700000000, 0).UTC(),
+		},
+		{
+			AccountKey:  "shared-account",
+			TokenID:     "b.json",
+			Path:        "/v1/responses",
+			StatusCode:  200,
+			InputTokens: 20,
+			CreatedAt:   time.Unix(1700000001, 0).UTC(),
+		},
+		{
+			AccountKey:  "user-1",
+			TokenID:     "a.json",
+			Path:        "/v1/responses",
+			StatusCode:  200,
+			InputTokens: 30,
+			CreatedAt:   time.Unix(1700000002, 0).UTC(),
+		},
+	}
+	if err := usageDB.InsertUsageBatch(context.Background(), records); err != nil {
+		t.Fatalf("InsertUsageBatch() error = %v", err)
+	}
+
+	if err := usageDB.RekeyTokenUsage(context.Background(), "a.json", "user-1"); err != nil {
+		t.Fatalf("RekeyTokenUsage() error = %v", err)
+	}
+
+	got := map[string]int{}
+	rows, err := usageDB.db.QueryContext(context.Background(), `
+SELECT account_key, COUNT(*)
+FROM usage_events
+GROUP BY account_key
+`)
+	if err != nil {
+		t.Fatalf("query account key counts: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var accountKey string
+		var count int
+		if err := rows.Scan(&accountKey, &count); err != nil {
+			t.Fatalf("scan account key count: %v", err)
+		}
+		got[accountKey] = count
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate account key counts: %v", err)
+	}
+
+	want := map[string]int{
+		"user-1":         2,
+		"shared-account": 1,
+	}
+	for key, count := range want {
+		if got[key] != count {
+			t.Fatalf("count for %q = %d, want %d; all counts = %v", key, got[key], count, got)
+		}
 	}
 }

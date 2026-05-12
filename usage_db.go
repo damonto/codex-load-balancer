@@ -128,6 +128,12 @@ ON usage_events(account_key, created_at_unix);
 `); err != nil {
 		return fmt.Errorf("create idx_usage_events_account_time: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, `
+CREATE INDEX IF NOT EXISTS idx_usage_events_token_account
+ON usage_events(token_id, account_key);
+`); err != nil {
+		return fmt.Errorf("create idx_usage_events_token_account: %w", err)
+	}
 	if err := s.ensureColumn(
 		ctx,
 		"usage_events",
@@ -226,6 +232,20 @@ func (s *UsageDB) InsertUsageBatch(ctx context.Context, records []UsageRecord) e
 		return fmt.Errorf("commit usage batch: %w", err)
 	}
 	committed = true
+	return nil
+}
+
+func (s *UsageDB) RekeyTokenUsage(ctx context.Context, tokenID string, accountKey string) error {
+	if tokenID == "" || accountKey == "" {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `
+UPDATE usage_events
+SET account_key = ?
+WHERE token_id = ? AND account_key <> ?
+`, accountKey, tokenID, accountKey); err != nil {
+		return fmt.Errorf("rekey token usage: %w", err)
+	}
 	return nil
 }
 

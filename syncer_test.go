@@ -33,6 +33,7 @@ func newIPv4TestServer(t *testing.T, handler http.Handler) *httptest.Server {
 func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 	tests := []struct {
 		name             string
+		initialUserID    string
 		initialAccountID string
 		initialEmail     string
 		initialPlanType  string
@@ -40,12 +41,14 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 		usageAccountID   string
 		usageEmail       string
 		usagePlanType    string
+		wantUserID       string
 		wantAccountID    string
 		wantEmail        string
 		wantPlanType     string
 	}{
 		{
 			name:             "usage metadata keeps token-derived account id",
+			initialUserID:    "user-legacy",
 			initialAccountID: "account-1",
 			initialEmail:     "legacy@example.com",
 			initialPlanType:  "Legacy",
@@ -53,18 +56,21 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 			usageAccountID:   "account-2",
 			usageEmail:       "fresh@example.com",
 			usagePlanType:    "plus",
+			wantUserID:       "user-1",
 			wantAccountID:    "account-1",
 			wantEmail:        "fresh@example.com",
 			wantPlanType:     "plus",
 		},
 		{
 			name:             "blank usage metadata keeps current values",
+			initialUserID:    "user-legacy",
 			initialAccountID: "account-1",
 			initialEmail:     "legacy@example.com",
 			initialPlanType:  "Legacy",
 			usageAccountID:   "",
 			usageEmail:       "",
 			usagePlanType:    "",
+			wantUserID:       "user-legacy",
 			wantAccountID:    "account-1",
 			wantEmail:        "legacy@example.com",
 			wantPlanType:     "Legacy",
@@ -78,6 +84,7 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 			usageAccountID:   "account-filled",
 			usageEmail:       "",
 			usagePlanType:    "",
+			wantUserID:       "user-fallback",
 			wantAccountID:    "account-filled",
 			wantEmail:        "legacy@example.com",
 			wantPlanType:     "Legacy",
@@ -91,6 +98,7 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 				ID:        "active.json",
 				Path:      filepath.Join(t.TempDir(), "active.json"),
 				Token:     "access-token",
+				UserID:    tt.initialUserID,
 				AccountID: tt.initialAccountID,
 				Email:     tt.initialEmail,
 				PlanType:  tt.initialPlanType,
@@ -124,7 +132,7 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 				}
 			}))
 
-			removed := syncOneToken(context.Background(), store, ts.Client(), ts.URL, TokenRef{
+			removed := syncOneToken(context.Background(), store, nil, ts.Client(), ts.URL, TokenRef{
 				ID:        "active.json",
 				Token:     "access-token",
 				AccountID: "account-1",
@@ -140,6 +148,9 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 			if token.PlanType != tt.wantPlanType {
 				t.Fatalf("PlanType = %q, want %q", token.PlanType, tt.wantPlanType)
 			}
+			if token.UserID != tt.wantUserID {
+				t.Fatalf("UserID = %q, want %q", token.UserID, tt.wantUserID)
+			}
 			if token.AccountID != tt.wantAccountID {
 				t.Fatalf("AccountID = %q, want %q", token.AccountID, tt.wantAccountID)
 			}
@@ -153,6 +164,67 @@ func TestSyncOneTokenUpdatesPlanTypeFromUsage(t *testing.T) {
 				t.Fatalf("Weekly = %+v, want known window with used percent 20", token.Weekly)
 			}
 		})
+	}
+}
+
+func TestSyncOneTokenRekeysUsageToSyncedUserID(t *testing.T) {
+	usageDB, err := openUsageDB(filepath.Join(t.TempDir(), "clb.db"))
+	if err != nil {
+		t.Fatalf("openUsageDB() error = %v", err)
+	}
+	defer usageDB.Close()
+
+	if err := usageDB.InsertUsage(context.Background(), UsageRecord{
+		AccountKey:  "shared-account",
+		TokenID:     "active.json",
+		Path:        "/v1/responses",
+		StatusCode:  http.StatusOK,
+		InputTokens: 10,
+		CreatedAt:   time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("InsertUsage() error = %v", err)
+	}
+
+	store := NewTokenStore()
+	store.UpsertToken(TokenState{
+		ID:        "active.json",
+		Token:     "access-token",
+		AccountID: "shared-account",
+	}, time.Now().UTC())
+
+	ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(rateLimitStatusPayload{
+			UserID:    "user-1",
+			AccountID: "shared-account",
+			RateLimit: &rateLimitStatusDetails{
+				PrimaryWindow: &rateLimitWindowSnapshot{
+					UsedPercent:        10,
+					LimitWindowSeconds: 18000,
+				},
+			},
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+
+	removed := syncOneToken(context.Background(), store, usageDB, ts.Client(), ts.URL, TokenRef{
+		ID:        "active.json",
+		Token:     "access-token",
+		AccountID: "shared-account",
+	})
+	if removed {
+		t.Fatal("syncOneToken() should not remove token")
+	}
+
+	var got string
+	if err := usageDB.db.QueryRowContext(context.Background(), `
+SELECT account_key FROM usage_events WHERE token_id = ?
+`, "active.json").Scan(&got); err != nil {
+		t.Fatalf("query account key: %v", err)
+	}
+	if got != "user-1" {
+		t.Fatalf("account_key = %q, want user-1", got)
 	}
 }
 
@@ -256,7 +328,7 @@ func TestSyncOneTokenKeepsFreePlan(t *testing.T) {
 		}
 	}))
 
-	removed := syncOneToken(context.Background(), store, ts.Client(), ts.URL, TokenRef{
+	removed := syncOneToken(context.Background(), store, nil, ts.Client(), ts.URL, TokenRef{
 		ID:        "active.json",
 		Token:     "access-token",
 		AccountID: "account-1",
@@ -297,7 +369,7 @@ func TestSyncUsageOnceKeepsFreePlan(t *testing.T) {
 		}
 	}))
 
-	syncUsageOnce(context.Background(), store, ts.Client(), ts.URL, usageSyncOptions{Concurrency: 1})
+	syncUsageOnce(context.Background(), store, nil, ts.Client(), ts.URL, usageSyncOptions{Concurrency: 1})
 	if _, ok := store.TokenSnapshot("active.json"); !ok {
 		t.Fatal("free-plan token should remain in store")
 	}
@@ -342,7 +414,7 @@ func TestSyncUsageNowRunsOnce(t *testing.T) {
 				}
 			}))
 
-			syncUsageNow(context.Background(), store, ts.URL, usageSyncOptions{Concurrency: 1})
+			syncUsageNow(context.Background(), store, nil, ts.URL, usageSyncOptions{Concurrency: 1})
 
 			if got := requests.Load(); got != tt.wantRequests {
 				t.Fatalf("requests = %d, want %d", got, tt.wantRequests)
@@ -375,7 +447,7 @@ func TestSyncOneTokenRemovesUnauthorizedToken(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 
-	removed := syncOneToken(context.Background(), store, ts.Client(), ts.URL, TokenRef{
+	removed := syncOneToken(context.Background(), store, nil, ts.Client(), ts.URL, TokenRef{
 		ID:        "active.json",
 		Token:     "old-access",
 		AccountID: "account-1",

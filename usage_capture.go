@@ -63,14 +63,17 @@ func (s *Server) recordTokenUsage(token TokenState, path string, statusCode int,
 }
 
 func accountKeyFromToken(token TokenState) string {
-	return accountKey(token.AccountID)
+	return identityKey(token.UserID, token.AccountID)
 }
 
 func accountKeyFromRef(ref TokenRef) string {
-	return accountKey(ref.AccountID)
+	return identityKey(ref.UserID, ref.AccountID)
 }
 
-func accountKey(accountID string) string {
+func identityKey(userID string, accountID string) string {
+	if userID != "" {
+		return userID
+	}
 	return accountID
 }
 

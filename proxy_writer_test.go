@@ -77,6 +77,43 @@ func TestForwardRequestWithTargetStripsHopByHopHeaders(t *testing.T) {
 	}
 }
 
+func TestForwardRequestUsesAccountIDHeaderWithMemberIdentity(t *testing.T) {
+	var gotHeaders http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+
+	server := &Server{
+		client:      upstream.Client(),
+		upstreamURL: target,
+	}
+	req := httptest.NewRequest(http.MethodPost, "http://proxy.local/responses", strings.NewReader(`{"ok":true}`))
+	resp, _, _, err := server.forwardRequest(req, []byte(`{"ok":true}`), TokenState{
+		Token:     "proxy-token",
+		UserID:    "user-1",
+		AccountID: "acct-1",
+	}, "/responses")
+	if err != nil {
+		t.Fatalf("forwardRequest() error = %v", err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+	if got := gotHeaders.Get("Authorization"); got != "Bearer proxy-token" {
+		t.Fatalf("Authorization = %q, want %q", got, "Bearer proxy-token")
+	}
+	if got := gotHeaders.Get("ChatGPT-Account-ID"); got != "acct-1" {
+		t.Fatalf("ChatGPT-Account-ID = %q, want %q", got, "acct-1")
+	}
+}
+
 func TestCopyHeadersStripsHopByHopHeaders(t *testing.T) {
 	tests := []struct {
 		name string
