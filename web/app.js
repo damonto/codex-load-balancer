@@ -45,7 +45,7 @@
     doughnutEmpty: "#334155",
   };
   var COLORS = themeColors();
-  var TREND_LINE_WIDTH = 2;
+  var TREND_LINE_WIDTH = 1.75;
   var PLAN_META = {
     free: {
       label: "free",
@@ -108,6 +108,7 @@
     payload: null,
     accounts: [],
     trendDays: 30,
+    compositionWindow: "total",
     sort: "total",
     search: "",
     trendChart: null,
@@ -250,7 +251,7 @@
     var line = emphasized ? "border-white/15" : "subtle-border border-slate-100";
     return (
       "" +
-      '<article class="min-h-33 rounded-2xl p-4 ' +
+      '<article class="min-h-29 rounded-xl p-3.5 ' +
       base +
       '">' +
       '<div class="text-xs font-extrabold ' +
@@ -258,15 +259,15 @@
       '">' +
       esc(label) +
       "</div>" +
-      '<div class="mt-2 text-2xl font-black leading-none tracking-normal tabular-nums sm:text-3xl">' +
+      '<div class="mt-1.5 text-2xl font-black leading-none tracking-normal tabular-nums sm:text-[1.65rem]">' +
       esc(fmt(total)) +
       "</div>" +
-      '<div class="mt-4 grid grid-cols-2 gap-3 border-t pt-3 ' +
+      '<div class="mt-3 grid grid-cols-2 gap-2.5 border-t pt-2.5 ' +
       line +
       '">' +
       '<div><div class="text-xs font-semibold ' +
       muted +
-      '">Input</div><div class="mt-1 text-lg font-black tabular-nums">' +
+      '">Input</div><div class="mt-1 text-base font-black tabular-nums">' +
       esc(fmt(input)) +
       '</div><div class="mt-1 text-xs font-semibold tabular-nums ' +
       muted +
@@ -275,7 +276,7 @@
       "</div></div>" +
       '<div><div class="text-xs font-semibold ' +
       muted +
-      '">Output</div><div class="mt-1 text-lg font-black tabular-nums">' +
+      '">Output</div><div class="mt-1 text-base font-black tabular-nums">' +
       esc(fmt(output)) +
       '</div><div class="mt-1 text-xs font-semibold tabular-nums ' +
       muted +
@@ -317,7 +318,7 @@
         return (
           '<button type="button" data-trend-days="' +
           days +
-          '" class="rounded-lg px-4 py-2 text-sm font-extrabold transition ' +
+          '" class="rounded-md px-3 py-1.5 text-[13px] font-extrabold transition ' +
           cls +
           '">' +
           days +
@@ -345,11 +346,55 @@
       borderWidth: cfg.borderWidth,
       borderDash: cfg.borderDash || [],
       pointRadius: 0,
-      pointHoverRadius: 4,
+      pointHoverRadius: 3,
       tension: 0.34,
       legendColor: cfg.legendColor || cfg.borderColor,
       legendDashed: Boolean(cfg.borderDash && cfg.borderDash.length),
     };
+  }
+
+  function compositionWindows() {
+    return [
+      { key: "total", label: "Total", title: "Total", totals: state.payload && state.payload.total },
+      {
+        key: "30d",
+        label: "Last 30 days",
+        title: "Last 30 days",
+        totals: state.payload && state.payload.recent_30_days,
+      },
+      {
+        key: "7d",
+        label: "Last 7 days",
+        title: "Last 7 days",
+        totals: state.payload && state.payload.recent_7_days,
+      },
+      { key: "today", label: "Today", title: "Today", totals: state.payload && state.payload.today },
+    ];
+  }
+
+  function selectedCompositionWindow() {
+    var windows = compositionWindows();
+    for (var i = 0; i < windows.length; i++) {
+      if (windows[i].key === state.compositionWindow) return windows[i];
+    }
+    return windows[0];
+  }
+
+  function renderCompositionSelect() {
+    var html = compositionWindows()
+      .map(function (window) {
+        return (
+          '<option value="' +
+          esc(window.key) +
+          '"' +
+          (state.compositionWindow === window.key ? " selected" : "") +
+          ">" +
+          esc(window.label) +
+          "</option>"
+        );
+      })
+      .join("");
+    $("compositionSelect").innerHTML = html;
   }
 
   function renderTrendChart() {
@@ -448,11 +493,11 @@
             position: "top",
             align: "end",
             labels: {
-              boxWidth: 18,
-              boxHeight: 8,
+              boxWidth: 14,
+              boxHeight: 7,
               color: COLORS.muted,
-              font: { weight: 800 },
-              padding: 14,
+              font: { size: 12, weight: 800 },
+              padding: 10,
             },
           },
           tooltip: {
@@ -475,17 +520,17 @@
             ticks: {
               color: COLORS.muted,
               maxTicksLimit: 7,
-              font: { weight: 700 },
+              font: { size: 12, weight: 700 },
             },
           },
           y: {
             beginAtZero: true,
             border: { display: false },
-            grid: { color: COLORS.grid },
+            grid: { color: COLORS.grid, lineWidth: 0.75 },
             ticks: {
               color: COLORS.muted,
               callback: fmtAxis,
-              font: { weight: 700 },
+              font: { size: 12, weight: 700 },
             },
           },
         },
@@ -494,11 +539,16 @@
   }
 
   function renderComposition(payload) {
+    renderCompositionSelect();
+    var selected = selectedCompositionWindow();
+    var totals = selected.totals || {};
+    $("compositionHeading").textContent = "Token Composition";
+
     var comp = compositionFor(
-      payload.total && payload.total.input_tokens,
-      payload.total && payload.total.cached_tokens,
-      payload.total && payload.total.output_tokens,
-      payload.composition,
+      totals.input_tokens,
+      totals.cached_tokens,
+      totals.output_tokens,
+      state.compositionWindow === "total" ? payload.composition : null,
     );
     var cached = part(comp, "cached_input");
     var input = part(comp, "input");
@@ -506,12 +556,12 @@
     var total = num(cached.tokens) + num(input.tokens) + num(output.tokens);
 
     $("compositionCenter").innerHTML =
-      '<div><div class="text-base font-extrabold">Total</div><div class="mt-1 text-xl font-black tabular-nums">' +
+      '<div><div class="text-sm font-extrabold">Total</div><div class="mt-1 text-lg font-black tabular-nums">' +
       esc(fmt(total)) +
       "</div></div>";
     $("compositionLegend").innerHTML = [
+      compositionLegendRow("Input", input, COLORS.input),
       compositionLegendRow("Cached Input", cached, COLORS.cached),
-      compositionLegendRow("Input (Non-cached)", input, COLORS.input),
       compositionLegendRow("Output", output, COLORS.output),
     ].join("");
 
@@ -522,27 +572,25 @@
       type: "doughnut",
       data: {
         labels:
-          total > 0
-            ? ["Cached Input", "Input (Non-cached)", "Output"]
-            : ["No usage"],
+          total > 0 ? ["Input", "Cached Input", "Output"] : ["No usage"],
         datasets: [
           {
             data:
-              total > 0 ? [cached.tokens, input.tokens, output.tokens] : [1],
+              total > 0 ? [input.tokens, cached.tokens, output.tokens] : [1],
             backgroundColor:
               total > 0
-                ? [COLORS.cached, COLORS.input, COLORS.output]
+                ? [COLORS.input, COLORS.cached, COLORS.output]
                 : [COLORS.doughnutEmpty],
             borderColor: COLORS.chartSurface,
-            borderWidth: 2,
-            hoverOffset: 4,
+            borderWidth: 1.5,
+            hoverOffset: 2,
           },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        cutout: "56%",
+        cutout: "58%",
         plugins: {
           legend: { display: false },
           tooltip: {
@@ -566,15 +614,15 @@
   function compositionLegendRow(label, data, color) {
     return (
       "" +
-      '<div class="grid grid-cols-[14px_1fr] gap-3">' +
-      '<span class="mt-1.5 size-3 rounded-full" style="background:' +
+      '<div class="grid grid-cols-[12px_1fr] gap-2.5">' +
+      '<span class="mt-1.5 size-2.5 rounded-full" style="background:' +
       esc(color) +
       '"></span>' +
       "<div>" +
-      '<div class="app-text text-sm font-extrabold text-[#251a2d]">' +
+      '<div class="app-text text-[13px] font-extrabold text-[#251a2d]">' +
       esc(label) +
       "</div>" +
-      '<div class="app-text mt-1 text-base font-black tabular-nums text-[#251a2d]">' +
+      '<div class="app-text mt-0.5 text-sm font-black tabular-nums text-[#251a2d]">' +
       esc(fmt(data.tokens)) +
       ' <span class="app-muted font-semibold text-slate-500">(' +
       esc(fmtPercent(data.percent)) +
@@ -931,6 +979,10 @@
       if (!btn) return;
       state.trendDays = num(btn.getAttribute("data-trend-days"));
       renderTrendChart();
+    });
+    $("compositionSelect").addEventListener("change", function (event) {
+      state.compositionWindow = event.target.value;
+      renderComposition(state.payload || {});
     });
     $("sortSelect").addEventListener("change", function (event) {
       state.sort = event.target.value;

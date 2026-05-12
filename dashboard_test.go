@@ -342,7 +342,19 @@ func TestDashboardAppOnlyFetchesOverview(t *testing.T) {
 	}
 
 	body := rr.Body.String()
-	for _, want := range []string{"stats/overview", "display: true", `position: "top"`, `label: "Total"`, `label: "Input"`, `label: "Cached Input"`, `label: "Input (Non Cached)"`, `label: "Output"`, `label: "Reasoning"`} {
+	for _, want := range []string{
+		"stats/overview",
+		"compositionSelect",
+		"Last 30 days",
+		"display: true",
+		`position: "top"`,
+		`label: "Total"`,
+		`label: "Input"`,
+		`label: "Cached Input"`,
+		`label: "Input (Non Cached)"`,
+		`label: "Output"`,
+		`label: "Reasoning"`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard app missing %q", want)
 		}

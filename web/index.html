@@ -13,8 +13,8 @@
 </head>
 
 <body class="dashboard-page min-h-screen bg-[#fbfbfc] text-[#2f2433] antialiased">
-  <main class="mx-auto max-w-378 px-4 py-5 sm:px-6 lg:px-8">
-    <header class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+  <main class="mx-auto max-w-378 px-4 py-4 sm:px-6 lg:px-7">
+    <header class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div class="flex items-center">
         <h1 class="app-heading text-[2rem] font-black leading-none tracking-normal text-[#251a2d] sm:text-[2.45rem]">Token Usage</h1>
       </div>
@@ -31,28 +31,35 @@
       </div>
     </header>
 
-    <section id="periodCards" class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"></section>
+    <section id="periodCards" class="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4"></section>
 
-    <section class="mb-6 grid grid-cols-1 gap-4 xl:grid-cols-[3fr_2fr]">
-      <article class="surface-card rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_18px_60px_rgba(15,23,42,0.06)]">
-        <div class="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <h2 class="app-heading text-xl font-black tracking-normal text-[#251a2d]">Usage Trend</h2>
+    <section class="mb-5 grid grid-cols-1 gap-3 xl:grid-cols-[3fr_2fr]">
+      <article class="surface-card rounded-xl border border-slate-200 bg-white p-4 shadow-[0_12px_38px_rgba(15,23,42,0.045)]">
+        <div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 class="app-heading text-lg font-black tracking-normal text-[#251a2d]">Usage Trend</h2>
           <div id="trendTabs" class="flex items-center gap-2"></div>
         </div>
-        <div class="relative h-72.5 min-h-72.5 w-full">
+        <div class="relative h-[17rem] min-h-[17rem] w-full">
           <canvas id="trendChart"></canvas>
         </div>
       </article>
 
-      <article class="surface-card rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_18px_60px_rgba(15,23,42,0.06)]">
-        <h2 class="app-heading mb-4 text-xl font-black tracking-normal text-[#251a2d]">Token Composition (Total)</h2>
-        <div class="grid gap-4 lg:grid-cols-[minmax(180px,0.8fr)_1fr] lg:items-center">
-          <div class="relative mx-auto h-72.5 w-full max-w-72.5">
+      <article class="surface-card rounded-xl border border-slate-200 bg-white p-4 shadow-[0_12px_38px_rgba(15,23,42,0.045)]">
+        <div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 id="compositionHeading" class="app-heading text-lg font-black tracking-normal text-[#251a2d]">Token Composition</h2>
+          <label class="control-surface flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-extrabold text-slate-600 shadow-sm">
+            <span class="sr-only">Composition window</span>
+            <select id="compositionSelect" class="app-text bg-transparent text-[#251a2d] outline-none">
+            </select>
+          </label>
+        </div>
+        <div class="grid gap-3 lg:grid-cols-[minmax(160px,0.75fr)_1fr] lg:items-center">
+          <div class="relative mx-auto h-[15.5rem] w-full max-w-[15.5rem]">
             <canvas id="compositionChart"></canvas>
             <div id="compositionCenter"
               class="app-text pointer-events-none absolute inset-0 grid place-items-center text-center text-[#251a2d]"></div>
           </div>
-          <div id="compositionLegend" class="grid gap-5"></div>
+          <div id="compositionLegend" class="grid gap-3.5"></div>
         </div>
       </article>
     </section>
