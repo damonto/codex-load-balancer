@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-//go:embed web/app.js web/index.html web/tailwind.css
+//go:embed web/app.js web/index.html web/tailwind.css web/plan-icons/*.png
 var dashboardFiles embed.FS
 
 var dashboardWebFS = mustDashboardWebFS()

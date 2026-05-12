@@ -1,3 +1,140 @@
 @import "tailwindcss";
 @source "./index.html";
 @source "./app.js";
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+    }
+  }
+}
+
+@layer components {
+  .dashboard-page {
+    background: #fbfbfc;
+    color: #2f2433;
+  }
+
+  .app-heading,
+  .app-text {
+    color: #251a2d;
+  }
+
+  .app-muted {
+    color: #64748b;
+  }
+
+  .app-subtle {
+    color: #94a3b8;
+  }
+
+  .surface-card {
+    background: #ffffff;
+    border-color: #e2e8f0;
+    color: #251a2d;
+  }
+
+  .control-surface {
+    background: #ffffff;
+    border-color: #e2e8f0;
+    color: #475569;
+  }
+
+  .app-input {
+    background: #ffffff;
+    border-color: #e2e8f0;
+    color: #251a2d;
+  }
+
+  .soft-button,
+  .trend-tab-active {
+    background: #fff1f5;
+    color: #e11d48;
+    border-color: #ffe4ec;
+  }
+
+  .trend-tab {
+    color: #64748b;
+  }
+
+  .subtle-border {
+    border-color: #f1f5f9;
+  }
+
+  .progress-track {
+    background: #ffe4ec;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .dashboard-page {
+      background: #0f1218 !important;
+      color: #dbe3ee !important;
+    }
+
+    .app-heading,
+    .app-text {
+      color: #f8fafc !important;
+    }
+
+    .app-muted {
+      color: #9aa7b8 !important;
+    }
+
+    .app-subtle {
+      color: #718096 !important;
+    }
+
+    .surface-card {
+      background: #171c24 !important;
+      border-color: #2a3342 !important;
+      color: #f8fafc !important;
+      box-shadow: 0 18px 60px rgb(0 0 0 / 0.24) !important;
+    }
+
+    .control-surface,
+    .app-input {
+      background: #171c24 !important;
+      border-color: #2a3342 !important;
+      color: #f8fafc !important;
+      box-shadow: 0 1px 2px rgb(0 0 0 / 0.24) !important;
+    }
+
+    .app-input::placeholder {
+      color: #718096 !important;
+    }
+
+    .control-surface option {
+      background: #171c24;
+      color: #f8fafc;
+    }
+
+    .soft-button,
+    .trend-tab-active {
+      background: #3b1320 !important;
+      border-color: #5f2132 !important;
+      color: #fb7185 !important;
+    }
+
+    .trend-tab {
+      color: #9aa7b8 !important;
+    }
+
+    .trend-tab:hover {
+      background: #202734 !important;
+      color: #f8fafc !important;
+    }
+
+    .subtle-border {
+      border-color: #273142 !important;
+    }
+
+    .progress-track {
+      background: #3b1320 !important;
+    }
+  }
+}

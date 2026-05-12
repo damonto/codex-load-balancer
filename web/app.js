@@ -1,5 +1,8 @@
 (function () {
-  var COLORS = {
+  var THEME_QUERY = window.matchMedia
+    ? window.matchMedia("(prefers-color-scheme: dark)")
+    : null;
+  var LIGHT_COLORS = {
     total: "#e11d48",
     cached: "#fb7185",
     input: "#60a5fa",
@@ -15,10 +18,91 @@
     outputLine: "rgba(124, 92, 255, 0.55)",
     reasoningLine: "rgba(245, 158, 11, 0.6)",
     outputSoft: "rgba(124, 92, 255, 0.14)",
+    chartSurface: "#ffffff",
+    tooltipBg: "rgba(37, 26, 45, 0.92)",
+    tooltipBorder: "rgba(226, 232, 240, 0.6)",
+    doughnutEmpty: "#e2e8f0",
   };
-  var CHIP_CLASS =
-    "inline-flex max-w-full items-center rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-extrabold leading-none text-rose-600";
+  var DARK_COLORS = {
+    total: "#fb7185",
+    cached: "#fda4af",
+    input: "#93c5fd",
+    nonCachedInput: "#2dd4bf",
+    output: "#a78bfa",
+    reasoning: "#fbbf24",
+    cachedSoft: "rgba(253, 164, 175, 0.18)",
+    inputSoft: "rgba(147, 197, 253, 0.16)",
+    text: "#f8fafc",
+    muted: "#9aa7b8",
+    grid: "#273142",
+    nonCachedInputLine: "rgba(45, 212, 191, 0.62)",
+    outputLine: "rgba(167, 139, 250, 0.62)",
+    reasoningLine: "rgba(251, 191, 36, 0.68)",
+    outputSoft: "rgba(167, 139, 250, 0.16)",
+    chartSurface: "#171c24",
+    tooltipBg: "rgba(15, 18, 24, 0.95)",
+    tooltipBorder: "rgba(42, 51, 66, 0.95)",
+    doughnutEmpty: "#334155",
+  };
+  var COLORS = themeColors();
   var TREND_LINE_WIDTH = 2;
+  var PLAN_META = {
+    free: {
+      label: "free",
+      icon: "stats/assets/plan-icons/free.png",
+      color: "#ff2f6d",
+      soft: "#fff1f5",
+      border: "#ffd5e2",
+      track: "#f1f5f9",
+      darkSoft: "#3b1320",
+      darkBorder: "#6f2438",
+      darkTrack: "#3b1320",
+    },
+    plus: {
+      label: "plus",
+      icon: "stats/assets/plan-icons/plus.png",
+      color: "#1476ff",
+      soft: "#eff6ff",
+      border: "#bfdbfe",
+      track: "#f1f5f9",
+      darkSoft: "#10233f",
+      darkBorder: "#1d4ed8",
+      darkTrack: "#1e293b",
+    },
+    prolite: {
+      label: "prolite",
+      icon: "stats/assets/plan-icons/prolite.png",
+      color: "#19c979",
+      soft: "#ecfdf5",
+      border: "#bbf7d0",
+      track: "#f1f5f9",
+      darkSoft: "#0f3327",
+      darkBorder: "#047857",
+      darkTrack: "#1e293b",
+    },
+    pro: {
+      label: "pro",
+      icon: "stats/assets/plan-icons/pro.png",
+      color: "#ff9f1a",
+      soft: "#fff7ed",
+      border: "#fed7aa",
+      track: "#f1f5f9",
+      darkSoft: "#3b2610",
+      darkBorder: "#b45309",
+      darkTrack: "#1e293b",
+    },
+    team: {
+      label: "team",
+      icon: "stats/assets/plan-icons/team.png",
+      color: "#7c3aed",
+      soft: "#f5f3ff",
+      border: "#ddd6fe",
+      track: "#f1f5f9",
+      darkSoft: "#23183f",
+      darkBorder: "#6d28d9",
+      darkTrack: "#1e293b",
+    },
+  };
 
   var state = {
     payload: null,
@@ -32,6 +116,26 @@
 
   function $(id) {
     return document.getElementById(id);
+  }
+
+  function isDarkMode() {
+    return Boolean(THEME_QUERY && THEME_QUERY.matches);
+  }
+
+  function themeColors() {
+    return isDarkMode() ? DARK_COLORS : LIGHT_COLORS;
+  }
+
+  function planSoft(plan) {
+    return isDarkMode() && plan.darkSoft ? plan.darkSoft : plan.soft;
+  }
+
+  function planBorder(plan) {
+    return isDarkMode() && plan.darkBorder ? plan.darkBorder : plan.border;
+  }
+
+  function planTrack(plan) {
+    return isDarkMode() && plan.darkTrack ? plan.darkTrack : plan.track;
   }
 
   function esc(value) {
@@ -87,16 +191,11 @@
     return "Generated at " + date.toLocaleString();
   }
 
-  function shortTokenID(value) {
-    var text = String(value || "");
-    if (text.length <= 30) return text;
-    return text.slice(0, 17) + "..." + text.slice(-10);
-  }
-
   function displayAccountName(account) {
+    var accountKey = String(account.account_key || "");
     return (
       account.email ||
-      account.account_key ||
+      (accountKey.toLowerCase().endsWith(".json") ? "" : accountKey) ||
       account.account_id ||
       account.user_id ||
       "Unknown account"
@@ -146,9 +245,9 @@
     var total = num(totals.total_tokens);
     var base = emphasized
       ? "bg-gradient-to-br from-[#fb527a] to-[#f0185b] text-white shadow-[0_16px_42px_rgba(240,24,91,0.28)]"
-      : "border border-slate-200 bg-white text-[#251a2d] shadow-[0_18px_60px_rgba(15,23,42,0.06)]";
-    var muted = emphasized ? "text-white/80" : "text-slate-500";
-    var line = emphasized ? "border-white/15" : "border-slate-100";
+      : "surface-card border border-slate-200 bg-white text-[#251a2d] shadow-[0_18px_60px_rgba(15,23,42,0.06)]";
+    var muted = emphasized ? "text-white/80" : "app-muted text-slate-500";
+    var line = emphasized ? "border-white/15" : "subtle-border border-slate-100";
     return (
       "" +
       '<article class="min-h-33 rounded-2xl p-4 ' +
@@ -169,21 +268,20 @@
       muted +
       '">Input</div><div class="mt-1 text-lg font-black tabular-nums">' +
       esc(fmt(input)) +
+      '</div><div class="mt-1 text-xs font-semibold tabular-nums ' +
+      muted +
+      '">Cached ' +
+      esc(fmt(cached)) +
       "</div></div>" +
       '<div><div class="text-xs font-semibold ' +
       muted +
       '">Output</div><div class="mt-1 text-lg font-black tabular-nums">' +
       esc(fmt(output)) +
-      "</div></div>" +
-      "</div>" +
-      '<div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs font-semibold ' +
+      '</div><div class="mt-1 text-xs font-semibold tabular-nums ' +
       muted +
-      '">' +
-      "<span>Cached " +
-      esc(fmt(cached)) +
-      "</span><span>|</span><span>Reasoning " +
+      '">Reasoning ' +
       esc(fmt(reasoning)) +
-      "</span>" +
+      "</div></div>" +
       "</div>" +
       "</article>"
     );
@@ -214,8 +312,8 @@
       .map(function (days) {
         var active = state.trendDays === days;
         var cls = active
-          ? "bg-rose-50 text-rose-600"
-          : "text-slate-500 hover:bg-slate-50 hover:text-slate-700";
+          ? "trend-tab-active bg-rose-50 text-rose-600"
+          : "trend-tab text-slate-500 hover:bg-slate-50 hover:text-slate-700";
         return (
           '<button type="button" data-trend-days="' +
           days +
@@ -358,6 +456,11 @@
             },
           },
           tooltip: {
+            backgroundColor: COLORS.tooltipBg,
+            titleColor: COLORS.text,
+            bodyColor: COLORS.text,
+            borderColor: COLORS.tooltipBorder,
+            borderWidth: 1,
             callbacks: {
               label: function (item) {
                 return item.dataset.label + ": " + fmt(item.raw);
@@ -429,8 +532,8 @@
             backgroundColor:
               total > 0
                 ? [COLORS.cached, COLORS.input, COLORS.output]
-                : ["#e2e8f0"],
-            borderColor: "#ffffff",
+                : [COLORS.doughnutEmpty],
+            borderColor: COLORS.chartSurface,
             borderWidth: 2,
             hoverOffset: 4,
           },
@@ -443,6 +546,11 @@
         plugins: {
           legend: { display: false },
           tooltip: {
+            backgroundColor: COLORS.tooltipBg,
+            titleColor: COLORS.text,
+            bodyColor: COLORS.text,
+            borderColor: COLORS.tooltipBorder,
+            borderWidth: 1,
             callbacks: {
               label: function (item) {
                 if (total <= 0) return "No usage";
@@ -463,12 +571,12 @@
       esc(color) +
       '"></span>' +
       "<div>" +
-      '<div class="text-sm font-extrabold text-[#251a2d]">' +
+      '<div class="app-text text-sm font-extrabold text-[#251a2d]">' +
       esc(label) +
       "</div>" +
-      '<div class="mt-1 text-base font-black tabular-nums text-[#251a2d]">' +
+      '<div class="app-text mt-1 text-base font-black tabular-nums text-[#251a2d]">' +
       esc(fmt(data.tokens)) +
-      ' <span class="font-semibold text-slate-500">(' +
+      ' <span class="app-muted font-semibold text-slate-500">(' +
       esc(fmtPercent(data.percent)) +
       ")</span></div>" +
       "</div>" +
@@ -499,7 +607,7 @@
     return (
       "" +
       '<div class="grid gap-1.5">' +
-      '<div class="flex items-center justify-between gap-3 text-xs font-bold text-slate-500">' +
+      '<div class="app-muted flex items-center justify-between gap-3 text-xs font-bold text-slate-500">' +
       "<span>" +
       esc(label) +
       '</span><span class="text-right">' +
@@ -507,14 +615,14 @@
       "</span>" +
       "</div>" +
       '<div class="flex items-center gap-2">' +
-      '<div class="h-1.5 flex-1 overflow-hidden rounded-full bg-rose-100">' +
+      '<div class="progress-track h-1.5 flex-1 overflow-hidden rounded-full bg-rose-100">' +
       '<span class="block h-full rounded-full" style="width:' +
       pct.toFixed(1) +
       "%;background:" +
       barColor +
       '"></span>' +
       "</div>" +
-      '<span class="w-9 text-right text-xs font-extrabold text-slate-500">' +
+      '<span class="app-muted w-9 text-right text-xs font-extrabold text-slate-500">' +
       (hasQuota ? Math.round(pct) + "%" : "-") +
       "</span>" +
       "</div>" +
@@ -563,16 +671,162 @@
     var accounts = filteredAccounts();
     $("accountHeading").textContent = "Accounts (" + accounts.length + ")";
     $("accountsEmpty").classList.toggle("hidden", accounts.length !== 0);
-    $("accountRows").innerHTML = accounts.map(accountRow).join("");
+    $("accountCards").innerHTML = accounts.map(accountCard).join("");
   }
 
-  function accountRow(account, index) {
-    var tokens = accountTokens(account);
-    var tokenLabel = tokens.length ? shortTokenID(tokens[0]) : "No token id";
-    var extra =
-      tokens.length > 1
-        ? '<span class="' + CHIP_CLASS + '">+' + (tokens.length - 1) + "</span>"
-        : "";
+  function normalizePlanType(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[\s_-]+/g, "");
+  }
+
+  function planFor(account, index) {
+    var key = normalizePlanType(account.plan_type);
+    if (PLAN_META[key]) return PLAN_META[key];
+    var fallbackColors = [
+      ["#f8fafc", "#475569", "#e2e8f0", "#1e293b", "#475569"],
+      ["#f5f3ff", "#6d28d9", "#ddd6fe", "#241a3a", "#6d28d9"],
+      ["#ecfeff", "#0891b2", "#a5f3fc", "#11313b", "#0891b2"],
+    ];
+    var colors = fallbackColors[index % fallbackColors.length];
+    return {
+      label: account.plan_type || "unknown",
+      icon: "",
+      color: colors[1],
+      soft: colors[0],
+      border: colors[2],
+      track: "#f1f5f9",
+      darkSoft: colors[3],
+      darkBorder: colors[4],
+      darkTrack: "#1e293b",
+    };
+  }
+
+  function planIcon(account, plan) {
+    if (plan.icon) {
+      return (
+        '<img class="size-9 shrink-0 object-contain sm:size-10" src="' +
+        esc(plan.icon) +
+        '" alt="' +
+        esc(plan.label) +
+        ' plan icon" loading="lazy">'
+      );
+    }
+    return (
+      '<div class="grid size-9 shrink-0 place-items-center rounded-lg text-base font-black sm:size-10" style="background:' +
+      esc(planSoft(plan)) +
+      ";color:" +
+      esc(plan.color) +
+      ";border:1px solid " +
+      esc(planBorder(plan)) +
+      '">' +
+      esc(accountInitial(account)) +
+      "</div>"
+    );
+  }
+
+  function planBadge(plan) {
+    return (
+      '<span class="inline-flex h-5 shrink-0 items-center rounded-md px-1.5 text-[10px] font-black uppercase leading-none" style="background:' +
+      esc(planSoft(plan)) +
+      ";color:" +
+      esc(plan.color) +
+      ";border:1px solid " +
+      esc(planBorder(plan)) +
+      '">' +
+      esc(String(plan.label || "unknown").toUpperCase()) +
+      "</span>"
+    );
+  }
+
+  function metricBlock(label, value, subtext, alignRight, color) {
+    return (
+      '<div class="' +
+      (alignRight ? "text-right" : "") +
+      '">' +
+      '<div class="app-muted text-[11px] font-extrabold leading-tight text-slate-500">' +
+      esc(label) +
+      "</div>" +
+      '<div class="mt-1 text-sm font-black leading-none tracking-normal tabular-nums" style="color:' +
+      esc(color || COLORS.text) +
+      '">' +
+      esc(value) +
+      "</div>" +
+      (subtext
+        ? '<div class="app-subtle mt-1 truncate text-[11px] font-bold leading-none text-slate-400 tabular-nums">' +
+          esc(subtext) +
+          "</div>"
+        : "") +
+      "</div>"
+    );
+  }
+
+  function quotaCard(label, hasQuota, used, limit, resetAt, plan) {
+    var pct = hasQuota ? quotaProgress(num(used), num(limit)) : 0;
+    var width = pct > 0 && pct < 1 ? "0.8" : pct.toFixed(1);
+    var pctText = hasQuota ? fmtPercent(pct) : "-";
+    var detail = hasQuota ? fmt(used) + " / " + fmt(limit) : "No quota data";
+    var reset = hasQuota ? "Reset " + formatResetAt(resetAt) : "";
+
+    return (
+      "" +
+      '<div class="grid gap-1.5">' +
+      '<div class="app-muted flex items-center justify-between gap-2 text-xs font-extrabold text-slate-500">' +
+      "<span>" +
+      esc(label) +
+      '</span><span class="app-text text-[#251a2d] tabular-nums">' +
+      esc(pctText) +
+      "</span>" +
+      "</div>" +
+      '<div class="h-1.5 overflow-hidden rounded-full" style="background:' +
+      esc(planTrack(plan)) +
+      '">' +
+      '<span class="block h-full rounded-full" style="width:' +
+      width +
+      "%;background:" +
+      esc(plan.color) +
+      '"></span>' +
+      "</div>" +
+      '<div class="app-muted flex items-center justify-between gap-2 text-[11px] font-bold leading-tight text-slate-500">' +
+      '<span class="tabular-nums">' +
+      esc(detail) +
+      "</span><span>" +
+      esc(reset) +
+      "</span>" +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function compositionBreakdown(cached, input, output) {
+    var cachedPct = clamp(num(cached.percent), 0, 100);
+    var inputPct = clamp(num(input.percent), 0, 100);
+    var outputPct = clamp(num(output.percent), 0, 100);
+    var items = [
+      ["Cached", cachedPct, COLORS.cached],
+      ["Input", inputPct, COLORS.input],
+      ["Output", outputPct, COLORS.output],
+    ];
+    return (
+      '<div class="subtle-border grid grid-cols-3 gap-2 border-t border-slate-100 pt-3 text-center">' +
+      items
+        .map(function (item) {
+          return (
+            '<div><div class="text-sm font-black tabular-nums" style="color:' +
+            esc(item[2]) +
+            '">' +
+            esc(fmtPercent(item[1])) +
+            '</div><div class="app-muted mt-1 text-[11px] font-extrabold text-slate-500">' +
+            esc(item[0]) +
+            "</div></div>"
+          );
+        })
+        .join("") +
+      "</div>"
+    );
+  }
+
+  function accountCard(account, index) {
     var comp = compositionFor(
       account.input_tokens,
       account.cached_tokens,
@@ -583,140 +837,69 @@
     var input = part(comp, "input");
     var output = part(comp, "output");
     var total = num(account.total_tokens);
-    var avatarColors = [
-      ["#ffd1dc", "#e11d48"],
-      ["#dbeafe", "#2563eb"],
-      ["#dcfce7", "#16a34a"],
-      ["#fef3c7", "#d97706"],
-      ["#ede9fe", "#7c3aed"],
-    ];
-    var colors = avatarColors[index % avatarColors.length];
+    var plan = planFor(account, index);
 
     return (
       "" +
-      '<tr class="align-middle text-sm text-[#251a2d]">' +
-      '<td class="px-5 py-5">' +
-      '<div class="flex min-w-0 items-center gap-4">' +
-      '<div class="grid size-12 shrink-0 place-items-center rounded-lg text-2xl font-black" style="background:' +
-      colors[0] +
-      ";color:" +
-      colors[1] +
-      '">' +
-      esc(accountInitial(account)) +
-      "</div>" +
-      '<div class="min-w-0">' +
-      '<div class="truncate text-base font-extrabold" title="' +
+      '<article class="surface-card rounded-xl border border-slate-200 bg-white p-3.5 text-[#251a2d] shadow-[0_10px_34px_rgba(15,23,42,0.045)]">' +
+      '<div class="flex min-w-0 items-center gap-2.5 sm:gap-3">' +
+      planIcon(account, plan) +
+      '<div class="flex min-w-0 flex-1 items-center gap-1.5">' +
+      '<div class="app-text min-w-0 truncate text-sm font-black tracking-normal" title="' +
       esc(displayAccountName(account)) +
       '">' +
       esc(displayAccountName(account)) +
       "</div>" +
-      '<div class="mt-2 flex max-w-65 flex-wrap gap-1.5">' +
-      (account.plan_type
-        ? '<span class="' +
-          CHIP_CLASS +
-          '">' +
-          esc(account.plan_type) +
-          "</span>"
-        : "") +
-      '<span class="' +
-      CHIP_CLASS +
-      '" title="' +
-      esc(tokens[0] || "") +
+      '<span class="app-muted shrink-0 text-sm font-black leading-none">&#183;</span>' +
+      planBadge(plan) +
+      "</div>" +
+      "</div>" +
+      '<div class="mt-4 grid grid-cols-3 gap-2 rounded-lg border p-2" style="background:' +
+      esc(planSoft(plan)) +
+      ";border-color:" +
+      esc(planBorder(plan)) +
       '">' +
-      esc(tokenLabel) +
-      "</span>" +
-      extra +
+      metricBlock("Total Usage", fmt(total), "", false) +
+      metricBlock(
+        "Input",
+        fmt(totalInput(account)),
+        "Cached " + fmt(account.cached_tokens),
+        false,
+        plan.color,
+      ) +
+      metricBlock("Output", fmt(account.output_tokens), "", true) +
       "</div>" +
-      "</div>" +
-      "</div>" +
-      "</td>" +
-      '<td class="px-5 py-5">' +
-      '<div class="grid w-60 gap-3">' +
-      windowBar(
-        "5 hour",
+      '<div class="mt-4 grid gap-3">' +
+      quotaCard(
+        "5 Hour Limit",
         Boolean(account.has_5h_quota),
         account.used_5h_tokens,
         account.quota_5h_tokens,
         account.five_hour_reset_at,
+        plan,
       ) +
-      windowBar(
-        "Weekly",
+      quotaCard(
+        "Weekly Limit",
         Boolean(account.has_week_quota),
         account.used_week_tokens,
         account.quota_week_tokens,
         account.weekly_reset_at,
+        plan,
       ) +
       "</div>" +
-      "</td>" +
-      '<td class="px-5 py-5 tabular-nums">' +
-      '<div class="text-base font-black">' +
-      esc(fmt(totalInput(account))) +
+      '<div class="mt-3.5">' +
+      compositionBreakdown(cached, input, output) +
       "</div>" +
-      '<div class="mt-2 text-base font-semibold text-slate-500">' +
-      esc(fmt(account.cached_tokens)) +
-      "</div>" +
-      "</td>" +
-      '<td class="px-5 py-5 text-base font-black tabular-nums">' +
-      esc(fmt(account.output_tokens)) +
-      "</td>" +
-      '<td class="px-5 py-5 text-base font-black tabular-nums">' +
-      esc(fmt(total)) +
-      "</td>" +
-      '<td class="px-5 py-5">' +
-      compositionBar(cached, input, output) +
-      "</td>" +
-      "</tr>"
-    );
-  }
-
-  function compositionBar(cached, input, output) {
-    var cachedPct = clamp(num(cached.percent), 0, 100);
-    var inputPct = clamp(num(input.percent), 0, 100);
-    var outputPct = clamp(num(output.percent), 0, 100);
-    return (
-      "" +
-      '<div class="w-70">' +
-      '<div class="flex h-2.5 overflow-hidden rounded-full bg-slate-100">' +
-      '<span style="width:' +
-      cachedPct.toFixed(1) +
-      "%;background:" +
-      COLORS.cached +
-      '"></span>' +
-      '<span style="width:' +
-      inputPct.toFixed(1) +
-      "%;background:" +
-      COLORS.input +
-      '"></span>' +
-      '<span style="width:' +
-      outputPct.toFixed(1) +
-      "%;background:" +
-      COLORS.output +
-      '"></span>' +
-      "</div>" +
-      '<div class="mt-3 grid grid-cols-3 gap-2 text-right text-xs font-extrabold tabular-nums">' +
-      '<span style="color:' +
-      COLORS.cached +
-      '">' +
-      esc(fmtPercent(cachedPct)) +
-      "</span>" +
-      '<span style="color:' +
-      COLORS.input +
-      '">' +
-      esc(fmtPercent(inputPct)) +
-      "</span>" +
-      '<span style="color:' +
-      COLORS.output +
-      '">' +
-      esc(fmtPercent(outputPct)) +
-      "</span>" +
-      "</div>" +
-      "</div>"
+      "</article>"
     );
   }
 
   function render(payload) {
+    COLORS = themeColors();
     state.payload = payload || {};
-    state.accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+    state.accounts = Array.isArray(state.payload.accounts)
+      ? state.payload.accounts
+      : [];
     renderPeriodCards(state.payload);
     renderTrendChart();
     renderComposition(state.payload);
@@ -757,6 +940,17 @@
       state.search = event.target.value;
       renderAccounts();
     });
+    if (THEME_QUERY) {
+      var onThemeChange = function () {
+        COLORS = themeColors();
+        if (state.payload) render(state.payload);
+      };
+      if (THEME_QUERY.addEventListener) {
+        THEME_QUERY.addEventListener("change", onThemeChange);
+      } else if (THEME_QUERY.addListener) {
+        THEME_QUERY.addListener(onThemeChange);
+      }
+    }
   }
 
   bindEvents();

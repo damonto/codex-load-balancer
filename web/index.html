@@ -4,22 +4,24 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
   <title>Token Usage</title>
+  <link rel="icon" type="image/png" href="stats/assets/icon.png" />
   <link rel="stylesheet" href="stats/assets/tailwind.css" />
   <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js"></script>
   <script defer src="stats/assets/app.js"></script>
 </head>
 
-<body class="min-h-screen bg-[#fbfbfc] text-[#2f2433] antialiased">
+<body class="dashboard-page min-h-screen bg-[#fbfbfc] text-[#2f2433] antialiased">
   <main class="mx-auto max-w-378 px-4 py-5 sm:px-6 lg:px-8">
     <header class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
       <div class="flex items-center">
-        <h1 class="text-[2rem] font-black leading-none tracking-normal text-[#251a2d] sm:text-[2.45rem]">Token Usage</h1>
+        <h1 class="app-heading text-[2rem] font-black leading-none tracking-normal text-[#251a2d] sm:text-[2.45rem]">Token Usage</h1>
       </div>
       <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <p id="meta" class="text-sm font-medium text-slate-500">Loading...</p>
+        <p id="meta" class="app-muted text-sm font-medium text-slate-500">Loading...</p>
         <button id="refreshBtn" type="button"
-          class="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-rose-100 bg-rose-50 px-4 text-sm font-extrabold text-rose-600 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-70">
+          class="soft-button inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-rose-100 bg-rose-50 px-4 text-sm font-extrabold text-rose-600 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-70">
           <span>Refresh</span>
           <svg viewBox="0 0 24 24" aria-hidden="true" class="size-4">
             <path fill="currentColor"
@@ -32,9 +34,9 @@
     <section id="periodCards" class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"></section>
 
     <section class="mb-6 grid grid-cols-1 gap-4 xl:grid-cols-[3fr_2fr]">
-      <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_18px_60px_rgba(15,23,42,0.06)]">
+      <article class="surface-card rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_18px_60px_rgba(15,23,42,0.06)]">
         <div class="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <h2 class="text-xl font-black tracking-normal text-[#251a2d]">Usage Trend</h2>
+          <h2 class="app-heading text-xl font-black tracking-normal text-[#251a2d]">Usage Trend</h2>
           <div id="trendTabs" class="flex items-center gap-2"></div>
         </div>
         <div class="relative h-72.5 min-h-72.5 w-full">
@@ -42,13 +44,13 @@
         </div>
       </article>
 
-      <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_18px_60px_rgba(15,23,42,0.06)]">
-        <h2 class="mb-4 text-xl font-black tracking-normal text-[#251a2d]">Token Composition (Total)</h2>
+      <article class="surface-card rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_18px_60px_rgba(15,23,42,0.06)]">
+        <h2 class="app-heading mb-4 text-xl font-black tracking-normal text-[#251a2d]">Token Composition (Total)</h2>
         <div class="grid gap-4 lg:grid-cols-[minmax(180px,0.8fr)_1fr] lg:items-center">
           <div class="relative mx-auto h-72.5 w-full max-w-72.5">
             <canvas id="compositionChart"></canvas>
             <div id="compositionCenter"
-              class="pointer-events-none absolute inset-0 grid place-items-center text-center text-[#251a2d]"></div>
+              class="app-text pointer-events-none absolute inset-0 grid place-items-center text-center text-[#251a2d]"></div>
           </div>
           <div id="compositionLegend" class="grid gap-5"></div>
         </div>
@@ -57,12 +59,12 @@
 
     <section>
       <div class="mb-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <h2 id="accountHeading" class="text-2xl font-black tracking-normal text-[#251a2d]">Accounts</h2>
+        <h2 id="accountHeading" class="app-heading text-2xl font-black tracking-normal text-[#251a2d]">Accounts</h2>
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <label class="flex h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 shadow-sm">
+          <label class="control-surface flex h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 shadow-sm">
             <span class="whitespace-nowrap">Sort by:</span>
             <select id="sortSelect"
-              class="min-w-32 bg-transparent text-[#251a2d] outline-none">
+              class="app-text min-w-32 bg-transparent text-[#251a2d] outline-none">
               <option value="total">Total Usage</option>
               <option value="input">Input</option>
               <option value="output">Output</option>
@@ -71,39 +73,26 @@
           </label>
           <label class="relative block h-11 min-w-0 sm:w-70">
             <svg viewBox="0 0 24 24" aria-hidden="true"
-              class="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-slate-400">
+              class="app-subtle pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-slate-400">
               <path fill="currentColor"
                 d="m20.3 18.9-4.2-4.2a7 7 0 1 0-1.4 1.4l4.2 4.2 1.4-1.4ZM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0Z" />
             </svg>
             <input id="searchInput" type="search" placeholder="Search account"
-              class="h-full w-full rounded-lg border border-slate-200 bg-white pl-11 pr-4 text-sm font-semibold text-[#251a2d] shadow-sm outline-none transition placeholder:text-slate-400 focus:border-rose-300 focus:ring-4 focus:ring-rose-100" />
+              class="app-input h-full w-full rounded-lg border border-slate-200 bg-white pl-11 pr-4 text-sm font-semibold text-[#251a2d] shadow-sm outline-none transition placeholder:text-slate-400 focus:border-rose-300 focus:ring-4 focus:ring-rose-100" />
           </label>
         </div>
       </div>
 
-      <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_18px_60px_rgba(15,23,42,0.06)]">
-        <div class="overflow-x-auto">
-          <table class="min-w-280 w-full border-collapse">
-            <thead class="bg-slate-50/70 text-left text-[0.68rem] font-extrabold uppercase tracking-normal text-slate-500">
-              <tr class="border-b border-slate-200">
-                <th class="px-5 py-4">Account</th>
-                <th class="px-5 py-4">Usage Limit</th>
-                <th class="px-5 py-4">Input<br><span class="font-semibold normal-case text-slate-400">Total / Cached</span></th>
-                <th class="px-5 py-4">Output<br><span class="font-semibold normal-case text-slate-400">Total</span></th>
-                <th class="px-5 py-4">Total Usage</th>
-                <th class="px-5 py-4">Composition</th>
-              </tr>
-            </thead>
-            <tbody id="accountRows" class="divide-y divide-slate-200"></tbody>
-          </table>
-        </div>
-        <div id="accountsEmpty" class="hidden px-6 py-10 text-center text-sm font-semibold text-slate-500">No accounts.</div>
-        <footer class="border-t border-slate-200 px-5 py-4 text-xs font-semibold text-slate-500">
-          <span>Cached: Tokens served from cache</span>
-          <span class="mx-3 text-slate-300">|</span>
-          <span>Reasoning: Tokens used for reasoning</span>
-        </footer>
+      <div id="accountCards" class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4"></div>
+      <div id="accountsEmpty"
+        class="surface-card app-muted hidden rounded-2xl border border-slate-200 bg-white px-6 py-10 text-center text-sm font-semibold text-slate-500 shadow-[0_18px_60px_rgba(15,23,42,0.06)]">
+        No accounts.
       </div>
+      <footer class="app-muted mt-4 px-2 text-center text-xs font-semibold text-slate-500">
+        <span>Usage data refreshes every 5 minutes</span>
+        <span class="app-subtle mx-3 text-slate-300">|</span>
+        <span>Cached: Tokens served from cache</span>
+      </footer>
     </section>
   </main>
 </body>
