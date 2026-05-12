@@ -147,7 +147,7 @@ Dashboard data:
 - Trend and composition: `recent_90_days`, `trend.windows[]` for 7/30/90 day UTC buckets, and `composition` for cached input / non-cached input / output split.
 - Current dashboard page load uses only `/stats/overview`.
 - Account table: `account_key`, `user_id`, `account_id`, `email`, `plan_type`, totals, per-account `composition`, and 5-hour / weekly quota usage from usage sync (`/backend-api/wham/usage`).
-- The dashboard loads Chart.js from the pinned CDN URL in `web/index.html`; Tailwind CSS remains embedded from `web/tailwind.css`.
+- The dashboard loads Chart.js from a pinned CDN URL in `web/index.html` and Alpine.js from a pinned ESM CDN import in `web/app.js`; Tailwind CSS remains embedded from `web/tailwind.css`.
 
 ## Logs
 

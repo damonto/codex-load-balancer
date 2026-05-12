@@ -301,9 +301,13 @@ func TestDashboardPageAssets(t *testing.T) {
 		wantAbsent  []string
 	}{
 		{
-			name:        "dashboard page loads cdn chart and app asset",
-			wantPresent: []string{"https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js", "stats/assets/app.js"},
-			wantAbsent:  []string{"stats/assets/chart.umd.min.js", "View all"},
+			name: "dashboard page loads cdn scripts and app asset",
+			wantPresent: []string{
+				"https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js",
+				`type="module" src="stats/assets/app.js"`,
+				`x-data="dashboard"`,
+			},
+			wantAbsent: []string{"stats/assets/chart.umd.min.js", "View all"},
 		},
 	}
 
@@ -333,36 +337,92 @@ func TestDashboardPageAssets(t *testing.T) {
 }
 
 func TestDashboardAppOnlyFetchesOverview(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/stats/assets/app.js", nil)
-	rr := httptest.NewRecorder()
-	newMux(&Server{}).ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	tests := []struct {
+		path string
+		want []string
+	}{
+		{
+			path: "/stats/assets/app.js",
+			want: []string{
+				`import Alpine from "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/module.esm.js"`,
+				`import { dashboard } from "./app/dashboard.js"`,
+				`Alpine.data("dashboard"`,
+				"Alpine.start()",
+			},
+		},
+		{
+			path: "/stats/assets/app/dashboard.js",
+			want: []string{"stats/overview", "$watch", "Last 30 days"},
+		},
+		{
+			path: "/stats/assets/app/charts.js",
+			want: []string{
+				"display: true",
+				`position: "top"`,
+				`label: "Total"`,
+				`label: "Input"`,
+				`label: "Cached Input"`,
+				`label: "Input (Non Cached)"`,
+				`label: "Output"`,
+				`label: "Reasoning"`,
+			},
+		},
+		{
+			path: "/stats/assets/app/plans.js",
+			want: []string{
+				`go: {`,
+				`label: "go"`,
+				`icon: "stats/assets/plan-icons/go.png"`,
+			},
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			rr := httptest.NewRecorder()
+			newMux(&Server{}).ServeHTTP(rr, req)
 
-	body := rr.Body.String()
-	for _, want := range []string{
-		"stats/overview",
-		"compositionSelect",
-		"Last 30 days",
-		"display: true",
-		`position: "top"`,
-		`label: "Total"`,
-		`label: "Input"`,
-		`label: "Cached Input"`,
-		`label: "Input (Non Cached)"`,
-		`label: "Output"`,
-		`label: "Reasoning"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("dashboard app missing %q", want)
-		}
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+			}
+
+			body := rr.Body.String()
+			for _, want := range tt.want {
+				if !strings.Contains(body, want) {
+					t.Fatalf("dashboard asset %s missing %q", tt.path, want)
+				}
+			}
+			for _, want := range []string{"stats/account?account_key=", "stats/accounts/details", "detailsCache", "syncDetails(", "viewAll", "showAll", "trendLegend", "toggleTrendLabel"} {
+				if strings.Contains(body, want) {
+					t.Fatalf("dashboard asset %s unexpectedly contains %q", tt.path, want)
+				}
+			}
+			for _, want := range []string{"innerHTML", "x-html", "insertAdjacentHTML"} {
+				if strings.Contains(body, want) {
+					t.Fatalf("dashboard asset %s still uses html string rendering via %q", tt.path, want)
+				}
+			}
+		})
 	}
-	for _, want := range []string{"stats/account?account_key=", "stats/accounts/details", "detailsCache", "syncDetails(", "viewAll", "showAll", "trendLegend", "toggleTrendLabel"} {
-		if strings.Contains(body, want) {
-			t.Fatalf("dashboard app unexpectedly contains %q", want)
-		}
+}
+
+func TestDashboardPlanIconAssets(t *testing.T) {
+	for _, name := range []string{"free", "go", "plus", "prolite", "pro", "team"} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/stats/assets/plan-icons/"+name+".png", nil)
+			rr := httptest.NewRecorder()
+			newMux(&Server{}).ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+			}
+			if got := rr.Header().Get("Content-Type"); !strings.HasPrefix(got, "image/png") {
+				t.Fatalf("Content-Type = %q, want image/png", got)
+			}
+			if rr.Body.Len() == 0 {
+				t.Fatal("response body is empty")
+			}
+		})
 	}
 }
 
