@@ -122,8 +122,9 @@ export function createTrendChart(canvas, buckets, colors) {
         },
         tooltip: {
           backgroundColor: colors.tooltipBg,
-          titleColor: colors.text,
-          bodyColor: colors.text,
+          titleColor: colors.tooltipText,
+          bodyColor: colors.tooltipText,
+          footerColor: colors.tooltipText,
           borderColor: colors.tooltipBorder,
           borderWidth: 1,
           callbacks: {
@@ -188,8 +189,9 @@ export function createCompositionChart(canvas, parts, total, colors) {
         legend: { display: false },
         tooltip: {
           backgroundColor: colors.tooltipBg,
-          titleColor: colors.text,
-          bodyColor: colors.text,
+          titleColor: colors.tooltipText,
+          bodyColor: colors.tooltipText,
+          footerColor: colors.tooltipText,
           borderColor: colors.tooltipBorder,
           borderWidth: 1,
           callbacks: {

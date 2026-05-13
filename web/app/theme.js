@@ -20,6 +20,7 @@ var LIGHT_COLORS = {
   outputSoft: "rgba(124, 92, 255, 0.14)",
   chartSurface: "#ffffff",
   tooltipBg: "rgba(37, 26, 45, 0.92)",
+  tooltipText: "#f8fafc",
   tooltipBorder: "rgba(226, 232, 240, 0.6)",
   doughnutEmpty: "#e2e8f0",
 };
@@ -42,6 +43,7 @@ var DARK_COLORS = {
   outputSoft: "rgba(167, 139, 250, 0.16)",
   chartSurface: "#171c24",
   tooltipBg: "rgba(15, 18, 24, 0.95)",
+  tooltipText: "#f8fafc",
   tooltipBorder: "rgba(42, 51, 66, 0.95)",
   doughnutEmpty: "#334155",
 };

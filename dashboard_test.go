@@ -365,6 +365,8 @@ func TestDashboardAppOnlyFetchesOverview(t *testing.T) {
 				`label: "Input (Non Cached)"`,
 				`label: "Output"`,
 				`label: "Reasoning"`,
+				"titleColor: colors.tooltipText",
+				"bodyColor: colors.tooltipText",
 			},
 		},
 		{
