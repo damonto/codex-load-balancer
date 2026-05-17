@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"time"
@@ -49,6 +50,7 @@ type UsageSnapshot struct {
 }
 
 var errUnauthorized = errors.New("unauthorized")
+var errDeactivatedWorkspace = errors.New("deactivated workspace")
 
 func fetchUsage(ctx context.Context, client *http.Client, usageURL string, ref TokenRef) (UsageSnapshot, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, usageURL, nil)
@@ -68,6 +70,15 @@ func fetchUsage(ctx context.Context, client *http.Client, usageURL string, ref T
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return UsageSnapshot{}, errUnauthorized
+	}
+	if resp.StatusCode == http.StatusPaymentRequired {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return UsageSnapshot{}, fmt.Errorf("read usage error response: %w", readErr)
+		}
+		if isDeactivatedWorkspaceError(resp.StatusCode, body) {
+			return UsageSnapshot{}, errDeactivatedWorkspace
+		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return UsageSnapshot{}, fmt.Errorf("usage request status %d", resp.StatusCode)

@@ -71,6 +71,12 @@ func (s *Server) retryAfterUsageLimit(tokenID string, tried map[string]bool, att
 	return attempt != 1 && s.store.HasAvailableToken(tried)
 }
 
+func (s *Server) retryAfterDeactivatedWorkspace(tokenID string, tried map[string]bool, attempt int) bool {
+	tried[tokenID] = true
+	removeTokenAndFile(s.store, tokenID, "deactivated_workspace")
+	return attempt != 1 && s.store.HasAvailableToken(tried)
+}
+
 func (s *Server) markTokenUsageLimit(tokenID string) {
 	s.store.MarkCooldown(tokenID, time.Now().Add(defaultCooldownDuration))
 	slog.Info("token cooldown", "token", tokenID, "reason", "usage limit")

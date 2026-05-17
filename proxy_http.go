@@ -103,6 +103,18 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		if isDeactivatedWorkspaceError(resp.StatusCode, respBody) {
+			if !s.retryAfterDeactivatedWorkspace(token.ID, tried, attempt) {
+				if err := writeResponse(w, resp, respBody); err != nil {
+					slog.Warn("write deactivated workspace response", "token", token.ID, "session", sessionID, "err", err)
+				}
+				return
+			}
+			retryResp = resp
+			retryBody = respBody
+			continue
+		}
+
 		s.applyUsageFromHeaders(token.ID, resp.Header)
 		if !stream {
 			if usage, ok := extractTokenUsageFromBody(respBody); ok {

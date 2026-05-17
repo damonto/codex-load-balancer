@@ -70,6 +70,18 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request, path st
 			continue
 		}
 
+		if isDeactivatedWorkspaceError(upstream.resp.StatusCode, upstream.body) {
+			if !s.retryAfterDeactivatedWorkspace(token.ID, tried, attempt) {
+				if err := writeResponse(w, upstream.resp, upstream.body); err != nil {
+					slog.Warn("write websocket deactivated workspace response", "token", token.ID, "session", sessionID, "err", err)
+				}
+				return
+			}
+			retryResp = upstream.resp
+			retryBody = upstream.body
+			continue
+		}
+
 		s.applyUsageFromHeaders(token.ID, upstream.resp.Header)
 		if upstream.resp.StatusCode != http.StatusSwitchingProtocols {
 			if usage, ok := extractTokenUsageFromBody(upstream.body); ok {

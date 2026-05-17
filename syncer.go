@@ -111,6 +111,9 @@ func syncOneToken(ctx context.Context, store *TokenStore, usageDB *UsageDB, clie
 		}
 	}
 	if err != nil {
+		if errors.Is(err, errDeactivatedWorkspace) {
+			return removeTokenAndFile(store, ref.ID, "deactivated_workspace")
+		}
 		if errors.Is(err, errUnauthorized) {
 			return removeTokenAndFile(store, ref.ID, "unauthorized")
 		}

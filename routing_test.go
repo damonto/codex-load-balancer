@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"net/http"
+	"testing"
+)
 
 func TestAllowedPathIncludesModels(t *testing.T) {
 	tests := []struct {
@@ -96,6 +99,50 @@ func TestIsLimitError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := isLimitError(tt.status, []byte(tt.body)); got != tt.want {
 				t.Fatalf("isLimitError() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsDeactivatedWorkspaceError(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{
+			name:   "payment required deactivated workspace",
+			status: http.StatusPaymentRequired,
+			body:   `{"detail":{"code":"deactivated_workspace"}}`,
+			want:   true,
+		},
+		{
+			name:   "ok status with deactivated workspace body",
+			status: http.StatusOK,
+			body:   `{"detail":{"code":"deactivated_workspace"}}`,
+		},
+		{
+			name:   "payment required different code",
+			status: http.StatusPaymentRequired,
+			body:   `{"detail":{"code":"billing_required"}}`,
+		},
+		{
+			name:   "payment required non json",
+			status: http.StatusPaymentRequired,
+			body:   `payment required`,
+		},
+		{
+			name:   "payment required missing detail",
+			status: http.StatusPaymentRequired,
+			body:   `{"error":{"code":"deactivated_workspace"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isDeactivatedWorkspaceError(tt.status, []byte(tt.body)); got != tt.want {
+				t.Fatalf("isDeactivatedWorkspaceError() = %v, want %v", got, tt.want)
 			}
 		})
 	}

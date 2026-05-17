@@ -462,3 +462,41 @@ func TestSyncOneTokenRemovesUnauthorizedToken(t *testing.T) {
 		t.Fatalf("token file should be removed, stat err = %v", err)
 	}
 }
+
+func TestSyncOneTokenRemovesDeactivatedWorkspaceToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "active.json")
+	if err := writeSessionFileForTest(path, "old-access", "account-1", "demo@example.com", "plus"); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	store := NewTokenStore()
+	store.UpsertToken(TokenState{
+		ID:        "active.json",
+		Path:      path,
+		Token:     "old-access",
+		AccountID: "account-1",
+	}, time.Now().UTC())
+	store.SetSession("session-1", "active.json")
+	ts := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = w.Write([]byte(`{"detail":{"code":"deactivated_workspace"}}`))
+	}))
+
+	removed := syncOneToken(context.Background(), store, nil, ts.Client(), ts.URL, TokenRef{
+		ID:        "active.json",
+		Token:     "old-access",
+		AccountID: "account-1",
+	})
+	if !removed {
+		t.Fatal("syncOneToken() should remove deactivated workspace token")
+	}
+	if _, ok := store.TokenSnapshot("active.json"); ok {
+		t.Fatal("token should be removed from store")
+	}
+	if _, ok := store.SessionToken("session-1"); ok {
+		t.Fatal("session should be cleared")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("token file should be removed, stat err = %v", err)
+	}
+}

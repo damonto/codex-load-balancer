@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -164,6 +166,135 @@ func TestHandleProxyClearsAllStickySessionsForRetriedToken(t *testing.T) {
 				t.Fatalf("token a cooldown = %v, want future time", tokenA.CooldownUntil)
 			}
 		})
+	}
+}
+
+func TestHandleProxyRemovesDeactivatedWorkspaceTokenAndRetries(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer token-a":
+			w.WriteHeader(http.StatusPaymentRequired)
+			_, _ = w.Write([]byte(`{"detail":{"code":"deactivated_workspace"}}`))
+		case "Bearer token-b":
+			_, _ = w.Write([]byte("ok"))
+		default:
+			t.Fatalf("unexpected Authorization = %q", r.Header.Get("Authorization"))
+		}
+	}))
+	defer upstream.Close()
+
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "a.json")
+	if err := os.WriteFile(pathA, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	store := NewTokenStore()
+	now := time.Now().UTC()
+	store.UpsertToken(TokenState{
+		ID:     "a.json",
+		Path:   pathA,
+		Token:  "token-a",
+		Weekly: WindowUsage{Known: true, LimitPercent: 100, UsedPercent: 50},
+	}, now)
+	store.UpsertToken(TokenState{
+		ID:     "b.json",
+		Path:   filepath.Join(dir, "b.json"),
+		Token:  "token-b",
+		Weekly: WindowUsage{Known: true, LimitPercent: 100, UsedPercent: 10},
+	}, now)
+	store.SetSession("request-session", "a.json")
+	store.SetSession("other-session", "a.json")
+
+	server := &Server{
+		store:       store,
+		client:      upstream.Client(),
+		upstreamURL: target,
+		apiKey:      "proxy-secret",
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-5"}`))
+	req.Header.Set("Authorization", "Bearer proxy-secret")
+	req.Header.Set("session_id", "request-session")
+	rr := httptest.NewRecorder()
+
+	server.handleProxy(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := rr.Body.String(); got != "ok" {
+		t.Fatalf("body = %q, want ok", got)
+	}
+	if _, ok := store.TokenSnapshot("a.json"); ok {
+		t.Fatal("token a should be removed")
+	}
+	if _, err := os.Stat(pathA); !os.IsNotExist(err) {
+		t.Fatalf("token file should be removed, stat err = %v", err)
+	}
+	if got, ok := store.SessionToken("request-session"); !ok || got != "b.json" {
+		t.Fatalf("request-session = %q, %v; want b.json, true", got, ok)
+	}
+	if got, ok := store.SessionToken("other-session"); ok {
+		t.Fatalf("other-session still bound to %q, want cleared", got)
+	}
+}
+
+func TestHandleProxyPreservesDeactivatedWorkspaceWhenNoAlternateToken(t *testing.T) {
+	const upstreamBody = `{"detail":{"code":"deactivated_workspace"}}`
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = w.Write([]byte(upstreamBody))
+	}))
+	defer upstream.Close()
+
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "active.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	store := NewTokenStore()
+	store.UpsertToken(TokenState{
+		ID:    "active.json",
+		Path:  path,
+		Token: "upstream-token",
+	}, time.Now().UTC())
+
+	server := &Server{
+		store:       store,
+		client:      upstream.Client(),
+		upstreamURL: target,
+		apiKey:      "proxy-secret",
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-5"}`))
+	req.Header.Set("Authorization", "Bearer proxy-secret")
+	rr := httptest.NewRecorder()
+
+	server.handleProxy(rr, req)
+
+	if rr.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusPaymentRequired)
+	}
+	if got := rr.Body.String(); got != upstreamBody {
+		t.Fatalf("body = %q, want %q", got, upstreamBody)
+	}
+	if _, ok := store.TokenSnapshot("active.json"); ok {
+		t.Fatal("token should be removed")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("token file should be removed, stat err = %v", err)
 	}
 }
 
@@ -373,5 +504,85 @@ func TestHandleWebSocketPreservesUpstreamFailureWhenNoAlternateToken(t *testing.
 				t.Fatalf("Accept-Encoding = %q, want empty", gotAcceptEncoding)
 			}
 		})
+	}
+}
+
+func TestHandleWebSocketRemovesDeactivatedWorkspaceTokenAndRetries(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer token-a":
+			w.WriteHeader(http.StatusPaymentRequired)
+			_, _ = w.Write([]byte(`{"detail":{"code":"deactivated_workspace"}}`))
+		case "Bearer token-b":
+			_, _ = w.Write([]byte("ok"))
+		default:
+			t.Fatalf("unexpected Authorization = %q", r.Header.Get("Authorization"))
+		}
+	}))
+	defer upstream.Close()
+
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "a.json")
+	if err := os.WriteFile(pathA, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+
+	store := NewTokenStore()
+	now := time.Now().UTC()
+	store.UpsertToken(TokenState{
+		ID:     "a.json",
+		Path:   pathA,
+		Token:  "token-a",
+		Weekly: WindowUsage{Known: true, LimitPercent: 100, UsedPercent: 50},
+	}, now)
+	store.UpsertToken(TokenState{
+		ID:     "b.json",
+		Path:   filepath.Join(dir, "b.json"),
+		Token:  "token-b",
+		Weekly: WindowUsage{Known: true, LimitPercent: 100, UsedPercent: 10},
+	}, now)
+	store.SetSession("request-session", "a.json")
+	store.SetSession("other-session", "a.json")
+
+	server := &Server{
+		store:       store,
+		client:      upstream.Client(),
+		upstreamURL: target,
+		apiKey:      "proxy-secret",
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/responses", nil)
+	req.Header.Set("Authorization", "Bearer proxy-secret")
+	req.Header.Set("Connection", "keep-alive, Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	req.Header.Set("session_id", "request-session")
+	rr := httptest.NewRecorder()
+
+	server.handleProxy(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	if got := rr.Body.String(); got != "ok" {
+		t.Fatalf("body = %q, want ok", got)
+	}
+	if _, ok := store.TokenSnapshot("a.json"); ok {
+		t.Fatal("token a should be removed")
+	}
+	if _, err := os.Stat(pathA); !os.IsNotExist(err) {
+		t.Fatalf("token file should be removed, stat err = %v", err)
+	}
+	if got, ok := store.SessionToken("request-session"); ok {
+		t.Fatalf("request-session still bound to %q, want cleared", got)
+	}
+	if got, ok := store.SessionToken("other-session"); ok {
+		t.Fatalf("other-session still bound to %q, want cleared", got)
 	}
 }

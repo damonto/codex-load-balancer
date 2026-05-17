@@ -31,6 +31,17 @@ func isLimitError(status int, body []byte) bool {
 	return isLimitErrorBody(body)
 }
 
+func isDeactivatedWorkspaceError(status int, body []byte) bool {
+	if status != http.StatusPaymentRequired {
+		return false
+	}
+	var envelope deactivatedWorkspaceEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return false
+	}
+	return envelope.Detail != nil && envelope.Detail.Code == "deactivated_workspace"
+}
+
 func isLimitErrorBody(body []byte) bool {
 	var envelope limitErrorEnvelope
 	if err := json.Unmarshal(body, &envelope); err != nil {
@@ -61,6 +72,12 @@ type limitErrorDetail struct {
 	Type    string `json:"type"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+type deactivatedWorkspaceEnvelope struct {
+	Detail *struct {
+		Code string `json:"code"`
+	} `json:"detail"`
 }
 
 func isLimitErrorDetail(detail *limitErrorDetail) bool {
